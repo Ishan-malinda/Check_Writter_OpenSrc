@@ -1,0 +1,56 @@
+{
+    "name":  "Bank of Ceylon",
+    "short":  "BOC",
+    "cheque_width_mm":  175,
+    "cheque_height_mm":  80,
+    "year_digits":  2,
+    "fields":  {
+                   "date_dd":  {
+                                   "x":  121,
+                                   "y":  10.5,
+                                   "font_size":  5.2,
+                                   "letter_spacing_mm":  6.4
+                               },
+                   "date_mm":  {
+                                   "x":  133.8,
+                                   "y":  10.5,
+                                   "font_size":  5.2,
+                                   "letter_spacing_mm":  6.4
+                               },
+                   "date_yyyy":  {
+                                     "x":  146.6,
+                                     "y":  10.5,
+                                     "font_size":  5.2,
+                                     "letter_spacing_mm":  6.4
+                                 },
+                   "payee":  {
+                                 "x":  18.0,
+                                 "y":  25.5,
+                                 "font_size":  5.0,
+                                 "max_width":  130
+                             },
+                   "amount_box":  {
+                                      "x":  114.0,
+                                      "y":  40.0,
+                                      "font_size":  5.2,
+                                      "max_width":  56,
+                                      "align":  "center"
+                                  },
+                   "amount_words":  {
+                                        "x":  18.0,
+                                        "y":  35.5,
+                                        "font_size":  5.0,
+                                        "max_width":  93
+                                    },
+                   "amount_words_line2":  {
+                                              "x":  18.0,
+                                              "y":  42.5,
+                                              "font_size":  5.0,
+                                              "max_width":  93
+                                          },
+                   "cross_x":  2,
+                   "cross_y":  4,
+                   "cross_width":  22,
+                   "cross_height":  26
+               }
+}
