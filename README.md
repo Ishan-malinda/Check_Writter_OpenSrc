@@ -12,3 +12,5 @@ Writing bank cheques manually can lead to spelling mistakes, incorrect date form
 - **Interactive Print Alignment**: Provides horizontal and vertical alignment offset settings in millimeters directly in the UI to correct printer tray feeding issues. Saved persistently using registry settings.
 - **Reliable Browser Printing**: Bypasses unstable printer-driver APIs and crashes by compiling the cheque into a PDF and opening it in your default web browser for print preview and submission.
 - **Standalone Executable**: Compiles into a single `dist/ChequeWriter.exe` that runs on any Windows PC without Python or PyQt6 installed.
+
+## Tech Stack
