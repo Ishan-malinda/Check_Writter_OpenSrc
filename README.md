@@ -10,3 +10,5 @@ Writing bank cheques manually can lead to spelling mistakes, incorrect date form
 - **Automatic Amount to Words**: Translates numeric amounts (e.g. `1500.50`) into standard cheque words automatically (e.g. `**One Thousand Five Hundred and Cents Fifty Only**`).
 - **Live Payee Autocomplete**: Uses a local SQLite database to save payee names and autocomplete them as you type, sorted by frequency of use.
 - **Interactive Print Alignment**: Provides horizontal and vertical alignment offset settings in millimeters directly in the UI to correct printer tray feeding issues. Saved persistently using registry settings.
+- **Reliable Browser Printing**: Bypasses unstable printer-driver APIs and crashes by compiling the cheque into a PDF and opening it in your default web browser for print preview and submission.
+- **Standalone Executable**: Compiles into a single `dist/ChequeWriter.exe` that runs on any Windows PC without Python or PyQt6 installed.
