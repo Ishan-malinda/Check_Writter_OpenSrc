@@ -14,3 +14,5 @@ Writing bank cheques manually can lead to spelling mistakes, incorrect date form
 - **Standalone Executable**: Compiles into a single `dist/ChequeWriter.exe` that runs on any Windows PC without Python or PyQt6 installed.
 
 ## Tech Stack
+- **Programming Language**: Python 3
+- **GUI Framework**: PyQt6
