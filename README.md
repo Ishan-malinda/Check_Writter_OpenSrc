@@ -21,3 +21,4 @@ Writing bank cheques manually can lead to spelling mistakes, incorrect date form
 
 ## Installation
 To run the application from source, you need Python installed on your system.
+
