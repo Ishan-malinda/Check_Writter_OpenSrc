@@ -19,3 +19,4 @@ Writing bank cheques manually can lead to spelling mistakes, incorrect date form
 - **Database**: SQLite3
 - **Layout Engine**: QPrinter & QPainter (Qt Graphics Framework)
 
+## Installation
