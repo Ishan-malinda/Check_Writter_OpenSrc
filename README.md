@@ -26,3 +26,4 @@ To run the application from source, you need Python installed on your system.
 ```bash
 git clone https://github.com/Ishan-malinda/Check_Writter_OpenSrc.git
 cd Check_Writter_OpenSrc
+```
