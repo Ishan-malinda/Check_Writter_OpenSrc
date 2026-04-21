@@ -28,3 +28,4 @@ git clone https://github.com/Ishan-malinda/Check_Writter_OpenSrc.git
 cd Check_Writter_OpenSrc
 ```
 
+2. Install dependencies:
