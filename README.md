@@ -33,3 +33,4 @@ cd Check_Writter_OpenSrc
 pip install -r requirements.txt
 ```
 
+3. Run the application:
