@@ -42,3 +42,4 @@ python main.py
 To build a single-file executable that does not require Python or PyQt6 installed on target PCs:
 ```bash
 pyinstaller ChequeWriter.spec
+```
