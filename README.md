@@ -44,3 +44,4 @@ To build a single-file executable that does not require Python or PyQt6 installe
 pyinstaller ChequeWriter.spec
 ```
 The output binary will be created at `dist/ChequeWriter.exe`.
+
