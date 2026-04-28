@@ -45,3 +45,4 @@ pyinstaller ChequeWriter.spec
 ```
 The output binary will be created at `dist/ChequeWriter.exe`.
 
+## Configuration
