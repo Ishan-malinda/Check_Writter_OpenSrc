@@ -53,3 +53,4 @@ Each bank's cheque template is defined in a JSON file inside the `banks/` folder
 - `fields`: Positioning parameters for:
   - `date_dd` / `date_mm` / `date_yyyy`: Individual boxes for date digits.
   - `payee`: Coordinates and width limits for the payee name.
+  - `amount_box`: Coordinates and width limits for the numeric amount.
