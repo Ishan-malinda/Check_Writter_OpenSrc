@@ -52,3 +52,4 @@ Each bank's cheque template is defined in a JSON file inside the `banks/` folder
 - `year_digits`: Number of digits to print for the year (e.g. 2 for `26`, 4 for `2026`).
 - `fields`: Positioning parameters for:
   - `date_dd` / `date_mm` / `date_yyyy`: Individual boxes for date digits.
+  - `payee`: Coordinates and width limits for the payee name.
