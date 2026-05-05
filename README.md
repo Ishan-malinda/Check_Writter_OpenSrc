@@ -55,3 +55,4 @@ Each bank's cheque template is defined in a JSON file inside the `banks/` folder
   - `payee`: Coordinates and width limits for the payee name.
   - `amount_box`: Coordinates and width limits for the numeric amount.
   - `amount_words` / `amount_words_line2`: Text coordinates for amount-in-words lines.
+  - `cross_x` / `cross_y`: Parameters for cheque crossing line origins.
