@@ -48,3 +48,4 @@ The output binary will be created at `dist/ChequeWriter.exe`.
 ## Configuration
 ### Bank Layout Specifications
 Each bank's cheque template is defined in a JSON file inside the `banks/` folder. All coordinate units are in millimeters (mm):
+- `cheque_width_mm` / `cheque_height_mm`: Dimensions of the physical cheque.
