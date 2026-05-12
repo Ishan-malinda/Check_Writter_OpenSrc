@@ -59,3 +59,4 @@ Each bank's cheque template is defined in a JSON file inside the `banks/` folder
 
 ## Alignment Offsets (Registry Settings)
 If text is shifted when printed on paper:
+- Adjust the **Vertical Shift** (negative values shift text up; positive values shift text down).
