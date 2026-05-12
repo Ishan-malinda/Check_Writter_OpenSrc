@@ -58,3 +58,4 @@ Each bank's cheque template is defined in a JSON file inside the `banks/` folder
   - `cross_x` / `cross_y`: Parameters for cheque crossing line origins.
 
 ## Alignment Offsets (Registry Settings)
+If text is shifted when printed on paper:
