@@ -61,3 +61,4 @@ Each bank's cheque template is defined in a JSON file inside the `banks/` folder
 If text is shifted when printed on paper:
 - Adjust the **Vertical Shift** (negative values shift text up; positive values shift text down).
 - Adjust the **Horizontal Shift** (negative values shift text left; positive values shift text right).
+- These configurations are saved automatically to `HKEY_CURRENT_USER\Software\Growvia\ChequeWriter` on Windows.
