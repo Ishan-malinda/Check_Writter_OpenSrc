@@ -66,3 +66,4 @@ If text is shifted when printed on paper:
 ## Browser Print Settings
 When printing the cheque PDF from your default browser, ensure the following settings are selected for perfect alignment:
 1. **Margins**: Set to **None** or **Minimum**.
+2. **Scale**: Set to **100%** (or Default). Do not select 'Fit to Page'.
