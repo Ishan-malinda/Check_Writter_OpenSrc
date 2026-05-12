@@ -64,3 +64,4 @@ If text is shifted when printed on paper:
 - These configurations are saved automatically to `HKEY_CURRENT_USER\Software\Growvia\ChequeWriter` on Windows.
 
 ## Browser Print Settings
+When printing the cheque PDF from your default browser, ensure the following settings are selected for perfect alignment:
