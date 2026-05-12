@@ -63,3 +63,4 @@ If text is shifted when printed on paper:
 - Adjust the **Horizontal Shift** (negative values shift text left; positive values shift text right).
 - These configurations are saved automatically to `HKEY_CURRENT_USER\Software\Growvia\ChequeWriter` on Windows.
 
+## Browser Print Settings
