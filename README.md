@@ -72,3 +72,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 
 ## File Architecture
 - `main.py`: Core GUI layout, event handling, PDF generator, and window coordinates offset logic.
+- `payee_db.py`: SQLite backend interface for tracking payee frequency history.
