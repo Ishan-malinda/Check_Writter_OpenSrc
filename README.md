@@ -76,3 +76,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 - `amount_words.py`: Algorithmic parser to translate amounts into English words.
 - `banks/`: JSON template layouts for supported banks.
 - `ChequeWriter.spec`: PyInstaller script containing packaging data.
+- `run.bat`: Quick execution batch file.
