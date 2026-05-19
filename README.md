@@ -69,3 +69,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 2. **Scale**: Set to **100%** (or Default). Do not select 'Fit to Page'.
 3. **Headers & Footers**: Ensure this checkbox is **unchecked** to avoid URLs or page numbers printing on the cheque.
 4. **Layout**: Set to **Landscape**.
+
