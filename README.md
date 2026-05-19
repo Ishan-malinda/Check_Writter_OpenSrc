@@ -71,3 +71,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 4. **Layout**: Set to **Landscape**.
 
 ## File Architecture
+- `main.py`: Core GUI layout, event handling, PDF generator, and window coordinates offset logic.
