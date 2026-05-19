@@ -75,3 +75,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 - `payee_db.py`: SQLite backend interface for tracking payee frequency history.
 - `amount_words.py`: Algorithmic parser to translate amounts into English words.
 - `banks/`: JSON template layouts for supported banks.
+- `ChequeWriter.spec`: PyInstaller script containing packaging data.
