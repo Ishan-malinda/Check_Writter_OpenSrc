@@ -70,3 +70,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 3. **Headers & Footers**: Ensure this checkbox is **unchecked** to avoid URLs or page numbers printing on the cheque.
 4. **Layout**: Set to **Landscape**.
 
+## File Architecture
