@@ -84,3 +84,4 @@ The autocomplete system uses a table called `payees`:
 CREATE TABLE IF NOT EXISTS payees (
     id INTEGER PRIMARY KEY,
     name TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    used_count INTEGER DEFAULT 1,
