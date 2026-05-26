@@ -82,3 +82,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 The autocomplete system uses a table called `payees`:
 ```sql
 CREATE TABLE IF NOT EXISTS payees (
+    id INTEGER PRIMARY KEY,
