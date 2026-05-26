@@ -80,3 +80,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 
 ## SQLite Payees Database Schema
 The autocomplete system uses a table called `payees`:
+```sql
