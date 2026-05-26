@@ -79,3 +79,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 - `run.bat`: Quick execution batch file.
 
 ## SQLite Payees Database Schema
+The autocomplete system uses a table called `payees`:
