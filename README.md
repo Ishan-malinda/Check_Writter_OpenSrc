@@ -78,3 +78,4 @@ When printing the cheque PDF from your default browser, ensure the following set
 - `ChequeWriter.spec`: PyInstaller script containing packaging data.
 - `run.bat`: Quick execution batch file.
 
+## SQLite Payees Database Schema
