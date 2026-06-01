@@ -97,3 +97,4 @@ CREATE TABLE IF NOT EXISTS payees (
 The payee dropdown appears as you start typing. It performs case-insensitive prefix matching, sorting suggestions by their usage frequency so that frequently printed payees appear at the top.
 
 ## Contributing
+Contributions are welcome! If you have updates to add a new bank layout configuration, please follow these steps:
