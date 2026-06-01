@@ -90,3 +90,4 @@ CREATE TABLE IF NOT EXISTS payees (
 ```
 
 ## Security Standards
+- Payee names and numeric/word amounts are automatically wrapped in security markers `**` to prevent alteration.
