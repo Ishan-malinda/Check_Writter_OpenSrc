@@ -95,3 +95,4 @@ CREATE TABLE IF NOT EXISTS payees (
 
 ## Autocomplete Behavior
 The payee dropdown appears as you start typing. It performs case-insensitive prefix matching, sorting suggestions by their usage frequency so that frequently printed payees appear at the top.
+
