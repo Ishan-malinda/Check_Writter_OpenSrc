@@ -93,3 +93,4 @@ CREATE TABLE IF NOT EXISTS payees (
 - Payee names and numeric/word amounts are automatically wrapped in security markers `**` to prevent alteration.
 - Amount in words uses intelligent word-wrapping to split into two lines dynamically, ensuring no letters are clipped.
 
+## Autocomplete Behavior
