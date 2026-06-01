@@ -94,3 +94,4 @@ CREATE TABLE IF NOT EXISTS payees (
 - Amount in words uses intelligent word-wrapping to split into two lines dynamically, ensuring no letters are clipped.
 
 ## Autocomplete Behavior
+The payee dropdown appears as you start typing. It performs case-insensitive prefix matching, sorting suggestions by their usage frequency so that frequently printed payees appear at the top.
