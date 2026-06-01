@@ -88,3 +88,4 @@ CREATE TABLE IF NOT EXISTS payees (
     last_used TEXT DEFAULT (date('now'))
 );
 ```
+
