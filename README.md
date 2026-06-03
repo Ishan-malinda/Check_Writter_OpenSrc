@@ -103,3 +103,4 @@ Contributions are welcome! If you have updates to add a new bank layout configur
 3. Open a Pull Request detailing the changes.
 
 ## License
+This project is open-source and released under the MIT License. See [LICENSE](LICENSE) for details.
