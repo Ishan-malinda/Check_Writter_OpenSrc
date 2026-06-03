@@ -106,3 +106,4 @@ Contributions are welcome! If you have updates to add a new bank layout configur
 This project is open-source and released under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Credits
+Developed by Growvia Solutions. Copyright 2026. All rights reserved.
