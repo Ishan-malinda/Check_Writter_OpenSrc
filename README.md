@@ -100,3 +100,4 @@ The payee dropdown appears as you start typing. It performs case-insensitive pre
 Contributions are welcome! If you have updates to add a new bank layout configuration, please follow these steps:
 1. Measure your bank cheque dimensions and text coordinates in millimeters.
 2. Create a new JSON configuration inside the `banks/` folder.
+3. Open a Pull Request detailing the changes.
