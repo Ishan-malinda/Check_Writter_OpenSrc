@@ -102,3 +102,4 @@ Contributions are welcome! If you have updates to add a new bank layout configur
 2. Create a new JSON configuration inside the `banks/` folder.
 3. Open a Pull Request detailing the changes.
 
+## License
