@@ -3,6 +3,8 @@
     "short":  "HNB",
     "cheque_width_mm":  175,
     "cheque_height_mm":  80,
+    "paper_width_mm":  180,
+    "paper_height_mm":  90,
     "year_digits":  2,
     "fields":  {
                    "date_dd":  {

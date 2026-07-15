@@ -13,7 +13,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QComboBox, QPushButton, QGroupBox, QFrame,
-    QDateEdit, QDoubleSpinBox, QSizePolicy,
+    QDateEdit, QDoubleSpinBox, QSizePolicy, QScrollArea,
     QMessageBox, QCompleter, QDialog, QStyle,
 )
 from PyQt6.QtCore import Qt, QDate, QRectF, QSizeF, QMarginsF, QStringListModel, QSettings
@@ -46,6 +46,19 @@ CROSS_MODES = [
 
 def mm(value: float) -> float:
     return value * MM_TO_PX
+
+
+def resource_path(name: str) -> Path:
+    """Locate a bundled file whether running frozen (PyInstaller) or from source."""
+    if getattr(sys, "frozen", False):
+        # onefile build extracts datas to _MEIPASS; also check next to the exe
+        for base in (getattr(sys, "_MEIPASS", None), Path(sys.executable).parent):
+            if base:
+                cand = Path(base) / name
+                if cand.exists():
+                    return cand
+        return Path(getattr(sys, "_MEIPASS", ".")) / name
+    return Path(__file__).parent / name
 
 
 def load_banks() -> dict:
@@ -155,7 +168,7 @@ class ChequeRenderer:
                  if ab.get("align") == "center" else Qt.AlignmentFlag.AlignLeft)
         self._draw_text(painter, ab["x"], ab["y"],
                         star(f"{self.amount:,.2f}"),
-                        ab["font_size"], bold=True,
+                        ab["font_size"], bold=False,
                         align=align, max_width_mm=ab.get("max_width", 54))
 
         # Amount in words — split using real font metrics so text never clips
@@ -586,8 +599,8 @@ class MainWindow(QMainWindow):
     def __init__(self, banks: dict):
         super().__init__()
         self.banks = banks
-        self.setWindowTitle("Growvia Cheque Writer")
-        self.setMinimumWidth(680)
+        self.setWindowTitle("Cheque Writer by Dev IMS")
+        self.setMinimumWidth(560)
 
         # Force light palette so system dark mode doesn't override our stylesheet
         pal = QPalette()
@@ -602,10 +615,9 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(APP_STYLE)
 
         central = QWidget()
-        self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setSpacing(12)
-        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(10)
+        root.setContentsMargins(20, 16, 20, 16)
 
         # ── Header ──────────────────────────────────────────────────────────
         header = QWidget()
@@ -673,10 +685,6 @@ class MainWindow(QMainWindow):
         self.payee_edit.setMinimumHeight(50)
         self.payee_edit.textChanged.connect(self._on_change)
         payee_inner.addWidget(self.payee_edit)
-
-        hint = QLabel("Previously used names appear as you type  ·  ** markers applied automatically")
-        hint.setStyleSheet("color: #9BAFC0; font-size: 11px; padding-left: 2px;")
-        payee_inner.addWidget(hint)
         root.addWidget(payee_grp)
 
         # ── Amount + Crossing ────────────────────────────────────────────────
@@ -770,6 +778,48 @@ class MainWindow(QMainWindow):
 
         root.addWidget(offset_grp)
 
+        # ── Printer ──────────────────────────────────────────────────────────
+        printer_grp = QGroupBox("Printer")
+        printer_inner = QVBoxLayout(printer_grp)
+        printer_inner.setContentsMargins(12, 18, 12, 12)
+        self.printer_combo = QComboBox()
+        self.printer_combo.setMinimumHeight(40)
+        for info in QPrinterInfo.availablePrinters():
+            self.printer_combo.addItem(info.printerName())
+        # Restore last used printer, else fall back to the system default
+        saved_printer = self.settings.value("printer", "")
+        idx = self.printer_combo.findText(saved_printer) if saved_printer else -1
+        if idx < 0:
+            idx = self.printer_combo.findText(QPrinterInfo.defaultPrinterName())
+        if idx >= 0:
+            self.printer_combo.setCurrentIndex(idx)
+        self.printer_combo.currentIndexChanged.connect(
+            lambda: self.settings.setValue("printer", self.printer_combo.currentText())
+        )
+        printer_inner.addWidget(self.printer_combo)
+
+        # Cheque paper-size name — forces this size per job, so the printer's
+        # DEFAULT paper (e.g. A4) can stay unchanged for normal printing.
+        # Must match the custom paper size name created in Windows exactly.
+        paper_row = QHBoxLayout()
+        paper_row.addWidget(QLabel("Cheque Paper Size Name:"))
+        self.paper_name_edit = QLineEdit()
+        self.paper_name_edit.setMinimumHeight(36)
+        self.paper_name_edit.setText(self.settings.value("paper_name", "Check SL"))
+        self.paper_name_edit.setToolTip(
+            "Must exactly match the custom paper size name created in Windows "
+            "(Print Server Properties), e.g. 'Check SL'. Leave blank to use the "
+            "printer's default paper."
+        )
+        self.paper_name_edit.textChanged.connect(
+            lambda: self.settings.setValue("paper_name", self.paper_name_edit.text().strip())
+        )
+        paper_row.addWidget(self.paper_name_edit)
+        printer_inner.addSpacing(8)
+        printer_inner.addLayout(paper_row)
+
+        root.addWidget(printer_grp)
+
         # ── Action buttons ───────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 8, 0, 0)
@@ -799,6 +849,17 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.print_btn)
         root.addLayout(btn_row)
 
+        # Wrap everything in a scroll area so the window always fits the screen
+        # and shows a scrollbar when it can't.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(central)
+        self.setCentralWidget(scroll)
+
+        # Start at a compact size that fits small laptop screens
+        self.resize(640, 700)
+
         self._on_change()
 
     # ------------------------------------------------------------------ helpers
@@ -824,10 +885,14 @@ class MainWindow(QMainWindow):
     def _configure_printer(self, printer: QPrinter):
         bank_key = self.bank_combo.currentData()
         cfg = self.banks[bank_key]
-        w_mm, h_mm = cfg["cheque_width_mm"], cfg["cheque_height_mm"]
+        # Use the PHYSICAL paper size (e.g. Check SL 180×90) for the PDF page so
+        # it matches the tray paper exactly — no rotation/centering shift when
+        # SumatraPDF prints it. Falls back to the cheque size if not configured.
+        w_mm = cfg.get("paper_width_mm", cfg["cheque_width_mm"])
+        h_mm = cfg.get("paper_height_mm", cfg["cheque_height_mm"])
 
-        # Custom page size: pass (short, long) = (80, 175) so Qt stores it
-        # portrait-style, then Landscape swaps it back to 175×80 ✓
+        # Custom page size: pass (short, long) = (90, 180) so Qt stores it
+        # portrait-style, then Landscape swaps it back to 180×90 ✓
         page_size = QPageSize(QSizeF(h_mm, w_mm), QPageSize.Unit.Millimeter, "Cheque")
         layout = QPageLayout(page_size, QPageLayout.Orientation.Landscape,
                              QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
@@ -866,6 +931,46 @@ class MainWindow(QMainWindow):
 
         webbrowser.open(f"file:///{pdf_path.replace(os.sep, '/')}")
 
+    def _silent_print(self, pdf_path: str) -> bool:
+        """Print the PDF straight to the selected printer via bundled SumatraPDF.
+
+        '-silent' suppresses any UI; '-print-settings noscale' prints the page
+        at exact 1:1 size (so alignment offsets stay correct) and lets SumatraPDF
+        deterministically rotate the landscape page to fit the cheque paper.
+        """
+        sumatra = resource_path("SumatraPDF.exe")
+        if not sumatra.exists():
+            QMessageBox.critical(self, "Print Error",
+                                 f"SumatraPDF.exe not found:\n{sumatra}")
+            return False
+
+        printer_name = self.printer_combo.currentText()
+        # 'noscale' keeps exact 1:1 size; 'paper=<name>' forces the cheque paper
+        # size for THIS job only, so the printer's default paper stays untouched.
+        print_settings = "noscale"
+        paper = self.paper_name_edit.text().strip()
+        if paper:
+            print_settings += f",paper={paper}"
+        args = [str(sumatra), "-print-to", printer_name,
+                "-silent", "-print-settings", print_settings, pdf_path]
+        try:
+            result = subprocess.run(
+                args, capture_output=True, text=True, timeout=60,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Print Error", f"Failed to print:\n{e}")
+            return False
+
+        if result.returncode != 0:
+            QMessageBox.critical(
+                self, "Print Error",
+                f"SumatraPDF returned error code {result.returncode}.\n"
+                f"{result.stderr.strip()}",
+            )
+            return False
+        return True
+
     def _print_cheque(self):
         if not self._validate():
             return
@@ -878,12 +983,19 @@ class MainWindow(QMainWindow):
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
         printer.setOutputFileName(pdf_path)
-        
+
         self._configure_printer(printer)
         self._draw_on_printer(printer)
 
-        # Open the PDF in the default web browser for printing
-        webbrowser.open(f"file:///{pdf_path.replace(os.sep, '/')}")
+        # Print silently — no browser, no dialog
+        if not self._silent_print(pdf_path):
+            return
+
+        # Clean up the temp PDF
+        try:
+            os.remove(pdf_path)
+        except OSError:
+            pass
 
         # Save payee to database history
         name = self.payee_edit.text().strip()
