@@ -1,14 +1,52 @@
-"""Local SQLite database for saving and retrieving payee names."""
+"""Local SQLite database for saving and retrieving payee names.
 
+Stores data in %APPDATA%/Growvia/ChequeWriter/payees.db so payee history
+persists across updates, PC installations, and non-admin environments.
+"""
+
+import os
+import shutil
 import sqlite3
+import sys
 from pathlib import Path
 
-import sys
 
-if getattr(sys, "frozen", False):
-    DB_PATH = Path(sys.executable).parent / "payees.db"
-else:
-    DB_PATH = Path(__file__).parent / "payees.db"
+def _resolve_db_path() -> Path:
+    """Resolve database path, preferring %APPDATA% for installed applications,
+    with automatic migration from legacy local payees.db.
+    """
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        app_dir = Path(appdata) / "Growvia" / "ChequeWriter"
+        try:
+            app_dir.mkdir(parents=True, exist_ok=True)
+            appdata_db = app_dir / "payees.db"
+
+            # Auto-migrate legacy local db if it exists and appdata db is new
+            local_db = (
+                Path(sys.executable).parent
+                if getattr(sys, "frozen", False)
+                else Path(__file__).parent
+            ) / "payees.db"
+            if not appdata_db.exists() and local_db.exists():
+                try:
+                    shutil.copy2(local_db, appdata_db)
+                except Exception:
+                    pass
+            return appdata_db
+        except Exception:
+            pass
+
+    # Fallback to local executable/source folder
+    base_dir = (
+        Path(sys.executable).parent
+        if getattr(sys, "frozen", False)
+        else Path(__file__).parent
+    )
+    return base_dir / "payees.db"
+
+
+DB_PATH = _resolve_db_path()
 
 
 def _conn() -> sqlite3.Connection:
@@ -42,7 +80,7 @@ def search_payees(prefix: str) -> list[str]:
     with _conn() as con:
         rows = con.execute(
             "SELECT name FROM payees WHERE name LIKE ? "
-            "ORDER BY used_count DESC, name ASC LIMIT 20",
+            "ORDER BY used_count DESC, name ASC LIMIT 25",
             (prefix.strip() + "%",),
         ).fetchall()
     return [r[0] for r in rows]

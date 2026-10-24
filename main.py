@@ -16,7 +16,10 @@ from PyQt6.QtWidgets import (
     QDateEdit, QDoubleSpinBox, QSizePolicy, QMessageBox,
     QCompleter, QRadioButton, QButtonGroup, QDialog,
 )
-from PyQt6.QtCore import Qt, QDate, QRectF, QSizeF, QMarginsF, QStringListModel, QSettings, QObject, QEvent
+from PyQt6.QtCore import (
+    Qt, QDate, QRectF, QSizeF, QMarginsF, QStringListModel, QSettings, QObject, QEvent,
+    pyqtSignal, QTimer,
+)
 from PyQt6.QtGui import (
     QPainter, QFont, QFontMetrics, QPen, QColor, QPageLayout, QPageSize, QPalette, QBrush, QIcon,
 )
@@ -281,14 +284,15 @@ class ChequeRenderer:
         lines = label_map.get(self.cross_mode, [])
 
         pen = QPen(QColor(0, 0, 0))
-        pen.setWidthF(mm(0.38))
+        pen.setWidthF(mm(0.32))
         painter.setPen(pen)
 
-        x1a, y1a = mm(2 + self.eff_x),  mm(18 + self.eff_y)
-        x1b, y1b = mm(24 + self.eff_x), mm(3 + self.eff_y)
+        # Refined, slightly smaller crossing stamp (approx 15-20% more compact)
+        x1a, y1a = mm(3.5 + self.eff_x),  mm(16.0 + self.eff_y)
+        x1b, y1b = mm(22.0 + self.eff_x), mm(3.5 + self.eff_y)
         painter.drawLine(int(x1a), int(y1a), int(x1b), int(y1b))
 
-        gap_mm = 8.0
+        gap_mm = 6.2
         import math
         angle_rad = math.atan2(y1a - y1b, x1b - x1a)
         dx = gap_mm * math.sin(angle_rad)
@@ -300,7 +304,7 @@ class ChequeRenderer:
         if not lines:
             return
 
-        mid_x = (x1a + x1b + x2a + x2b) / 4 + mm(3)
+        mid_x = (x1a + x1b + x2a + x2b) / 4 + mm(2.2)
         mid_y = (y1a + y1b + y2a + y2b) / 4
         angle_deg = math.degrees(math.atan2(y1b - y1a, x1b - x1a))
 
@@ -308,16 +312,16 @@ class ChequeRenderer:
         painter.translate(mid_x, mid_y)
         painter.rotate(angle_deg)
 
-        font = self._make_font(3.5)
+        font = self._make_font(2.8)
         painter.setFont(font)
         painter.setPen(QPen(QColor(0, 0, 0)))
 
-        text_spacing = mm(4.5)
+        text_spacing = mm(3.6)
         total = text_spacing * (len(lines) - 1)
-        half_w = mm(18)
+        half_w = mm(15)
         for i, text in enumerate(lines):
             y_off = -total / 2 + i * text_spacing
-            rect = QRectF(-half_w, y_off - mm(3.5), half_w * 2, mm(4.5))
+            rect = QRectF(-half_w, y_off - mm(2.8), half_w * 2, mm(3.6))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
         painter.restore()
@@ -424,34 +428,91 @@ class ChequePreviewWidget(QFrame):
             painter.restore()
 
 
-class PayeeLineEdit(QLineEdit):
-    """QLineEdit with live SQLite-backed autocomplete."""
+class PayeeComboBox(QComboBox):
+    """Editable QComboBox with persistent SQLite database storage and dropdown history."""
+
+    textChanged = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._model = QStringListModel()
-        self._completer = QCompleter(self._model, self)
-        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        self._completer.setFilterMode(Qt.MatchFlag.MatchStartsWith)
-        popup = self._completer.popup()
-        if popup:
-            popup.setStyleSheet(
-                "QListView { font-size: 13px; padding: 4px; color: #111; background: white; }"
-                "QListView::item { padding: 4px 6px; min-height: 24px; }"
-                "QListView::item:selected { background: #0284C7; color: white; }"
+        self.setObjectName("PayeeCombo")
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.setMaxVisibleItems(15)
+
+        # Style inner lineEdit
+        if self.lineEdit():
+            self.lineEdit().setStyleSheet(
+                "QLineEdit {"
+                "  font-size: 14px; font-weight: 600; color: #0F172A;"
+                "  background: transparent; border: none; padding: 2px 4px;"
+                "}"
             )
-        self.setCompleter(self._completer)
-        self.textEdited.connect(self._refresh_suggestions)
+            self.lineEdit().editingFinished.connect(self._on_finished_editing)
+            self.lineEdit().returnPressed.connect(self._on_finished_editing)
 
-    def _refresh_suggestions(self, text: str):
-        suggestions = search_payees(text) if text.strip() else []
-        self._model.setStringList(suggestions)
+        # Dropdown popup styling
+        view = self.view()
+        if view:
+            view.setStyleSheet(
+                "QListView { font-size: 13px; font-weight: 500; padding: 4px; color: #0F172A; background: #FFFFFF; outline: none; }"
+                "QListView::item { padding: 6px 10px; min-height: 24px; border-radius: 4px; }"
+                "QListView::item:hover { background: #E0F2FE; color: #0369A1; }"
+                "QListView::item:selected { background: #0284C7; color: #FFFFFF; }"
+            )
 
-    def focusInEvent(self, event):
-        super().focusInEvent(event)
-        if not self.text():
-            self._model.setStringList(all_payees())
+        # Autocompletion
+        comp = self.completer()
+        if comp:
+            comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            comp.setFilterMode(Qt.MatchFlag.MatchContains)
+            comp.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            popup = comp.popup()
+            if popup:
+                popup.setStyleSheet(
+                    "QListView { font-size: 13px; font-weight: 500; padding: 4px; color: #0F172A; background: #FFFFFF; outline: none; }"
+                    "QListView::item { padding: 6px 10px; min-height: 24px; border-radius: 4px; }"
+                    "QListView::item:hover { background: #E0F2FE; color: #0369A1; }"
+                    "QListView::item:selected { background: #0284C7; color: #FFFFFF; }"
+                )
+
+        self.currentTextChanged.connect(self.textChanged.emit)
+
+        # Populate from database
+        self.reload_payees()
+        self.setEditText("")
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+    def setPlaceholderText(self, text: str):
+        if self.lineEdit():
+            self.lineEdit().setPlaceholderText(text)
+
+    def text(self) -> str:
+        return self.currentText().strip()
+
+    def setText(self, text: str):
+        self.setEditText(text)
+
+    def reload_payees(self, keep_text: str = ""):
+        items = all_payees()
+        self.blockSignals(True)
+        self.clear()
+        if items:
+            self.addItems(items)
+        if keep_text is not None:
+            self.setEditText(keep_text)
+        self.blockSignals(False)
+
+    def _on_finished_editing(self):
+        val = self.text()
+        if val:
+            save_payee(val)
+            self.reload_payees(keep_text=val)
+
+    def save_current(self):
+        self._on_finished_editing()
 
 
 class NoScrollComboBox(QComboBox):
@@ -537,17 +598,33 @@ QDateEdit::drop-down {
 """
 
 PAYEE_STYLE = """
-QLineEdit {
+QComboBox#PayeeCombo {
     font-size: 14px;
     font-weight: 600;
     color: #0F172A;
     background-color: #FFFFFF;
     border: 1.5px solid #CBD5E1;
     border-radius: 6px;
-    padding: 7px 10px;
+    padding: 3px 8px;
 }
-QLineEdit:focus {
-    border: 2px solid #0284C7;
+QComboBox#PayeeCombo:focus, QComboBox#PayeeCombo:hover {
+    border-color: #0284C7;
+}
+QComboBox#PayeeCombo::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 28px;
+    border-left: 1px solid #CBD5E1;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+    background-color: #F8FAFC;
+}
+QComboBox#PayeeCombo::drop-down:hover {
+    background-color: #E2E8F0;
+}
+QComboBox#PayeeCombo::down-arrow {
+    width: 10px;
+    height: 10px;
 }
 """
 
@@ -661,6 +738,11 @@ class MainWindow(QMainWindow):
         self.bank_combo.setMinimumHeight(34)
         for short in self.banks:
             self.bank_combo.addItem(self.banks[short]["name"], short)
+        saved_bank = self.settings.value("bank", "")
+        if saved_bank:
+            idx_b = self.bank_combo.findData(saved_bank)
+            if idx_b >= 0:
+                self.bank_combo.setCurrentIndex(idx_b)
         self.bank_combo.currentIndexChanged.connect(self._on_change)
         row1.addWidget(self.bank_combo, stretch=3)
 
@@ -672,8 +754,8 @@ class MainWindow(QMainWindow):
         row1.addWidget(self.date_edit, stretch=2)
         left_layout.addLayout(row1)
 
-        # Row 2: Pay To
-        self.payee_edit = PayeeLineEdit()
+        # Row 2: Pay To (Dropdown + Editable with DB persistence)
+        self.payee_edit = PayeeComboBox()
         self.payee_edit.setPlaceholderText("Pay To (e.g. MR. SAMPATH PERERA)...")
         self.payee_edit.setStyleSheet(PAYEE_STYLE)
         self.payee_edit.setMinimumHeight(36)
@@ -699,7 +781,12 @@ class MainWindow(QMainWindow):
         self.cross_combo.setMinimumHeight(34)
         for m in CROSS_MODES:
             self.cross_combo.addItem(m)
-        self.cross_combo.setCurrentIndex(0)
+        saved_cross = self.settings.value("cross_mode", "Cross Only")
+        idx_c = self.cross_combo.findText(saved_cross)
+        if idx_c >= 0:
+            self.cross_combo.setCurrentIndex(idx_c)
+        else:
+            self.cross_combo.setCurrentIndex(0)
         self.cross_combo.currentIndexChanged.connect(self._on_change)
         row3.addWidget(self.cross_combo, stretch=3)
         left_layout.addLayout(row3)
@@ -891,6 +978,32 @@ class MainWindow(QMainWindow):
         self.paper_name_edit.setVisible(self.paper_mode_combo.currentText() == PAPER_MODE_EXACT)
         adv_layout.addWidget(self.paper_name_edit)
 
+        # Row 5c: Save Settings Action Row
+        save_settings_row = QHBoxLayout()
+        save_settings_row.setSpacing(10)
+
+        self.save_settings_btn = QPushButton("💾 Save Settings")
+        self.save_settings_btn.setMinimumHeight(32)
+        self.save_settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_settings_btn.setToolTip("Save current offsets, date fine-tune, paper feed, printer, and defaults permanently")
+        self.save_settings_btn.setStyleSheet(
+            "QPushButton {"
+            "  font-size: 11px; font-weight: 700; background: #0284C7; color: #FFFFFF;"
+            "  border: none; border-radius: 4px; padding: 6px 14px;"
+            "}"
+            "QPushButton:hover { background: #0369A1; }"
+            "QPushButton:pressed { background: #075985; }"
+        )
+        self.save_settings_btn.clicked.connect(self._save_settings)
+        save_settings_row.addWidget(self.save_settings_btn)
+
+        self.settings_status_lbl = QLabel("")
+        self.settings_status_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #16A34A;")
+        save_settings_row.addWidget(self.settings_status_lbl)
+        save_settings_row.addStretch()
+
+        adv_layout.addLayout(save_settings_row)
+
         # Hide container by default
         self.advanced_container.setVisible(False)
         left_layout.addWidget(self.advanced_container)
@@ -1056,6 +1169,45 @@ class MainWindow(QMainWindow):
         if idx_yf >= 0:
             self.year_format_combo.setCurrentIndex(idx_yf)
 
+    def _save_settings(self):
+        """Persist fine-tuning offsets, paper feed mode, printer, and defaults to disk/registry."""
+        # Alignment offsets
+        self.settings.setValue("x_offset", self.x_offset_spin.value())
+        self.settings.setValue("y_offset", self.y_offset_spin.value())
+
+        # Date shift & year format
+        self.settings.setValue("date_x_offset", self.date_x_spin.value())
+        self.settings.setValue("date_y_offset", self.date_y_spin.value())
+        self.settings.setValue("year_format", self.year_format_combo.currentText())
+
+        # Paper feed mode
+        self.settings.setValue("paper_mode", self.paper_mode_combo.currentText())
+
+        # Selected printer
+        if hasattr(self, "printer_combo") and self.printer_combo.currentText():
+            self.settings.setValue("printer", self.printer_combo.currentText())
+
+        # Bank & crossing selections
+        if hasattr(self, "bank_combo") and self.bank_combo.currentData():
+            self.settings.setValue("bank", self.bank_combo.currentData())
+        if hasattr(self, "cross_combo") and self.cross_combo.currentText():
+            self.settings.setValue("cross_mode", self.cross_combo.currentText())
+
+        # Custom paper name if present
+        if hasattr(self, "paper_name_edit"):
+            self.settings.setValue("paper_name", self.paper_name_edit.text().strip())
+
+        # Current payee saved to DB and dropdown updated
+        if hasattr(self, "payee_edit"):
+            self.payee_edit.save_current()
+
+        # Force sync to persistent storage
+        self.settings.sync()
+
+        # Feedback
+        self.settings_status_lbl.setText("✓ Settings saved successfully for next time!")
+        QTimer.singleShot(4000, lambda: self.settings_status_lbl.setText(""))
+
     def _on_offset_changed(self):
         self.settings.setValue("x_offset", self.x_offset_spin.value())
         self.settings.setValue("y_offset", self.y_offset_spin.value())
@@ -1176,10 +1328,8 @@ class MainWindow(QMainWindow):
         try:
             self._draw_on_printer(printer, draw_guidelines=False)
 
-            # Save payee to database history
-            name = self.payee_edit.text().strip()
-            if name:
-                save_payee(name)
+            # Save payee to database history & refresh dropdown
+            self.payee_edit.save_current()
 
             QMessageBox.information(
                 self, "Print Sent",
