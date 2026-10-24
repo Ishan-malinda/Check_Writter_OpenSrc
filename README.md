@@ -1,17 +1,27 @@
-# Sri Lankan Bank Cheque Writer
+# Growvia Cheque Writer (Universal A4)
 
-A lightweight, professional desktop application built with Python and PyQt6 to print cheques for Sri Lankan banks.
+A lightweight, professional desktop application built with Python and PyQt6 to print cheques for Sri Lankan banks with **universal printer compatibility** via standard A4 feed logic.
 
 ## Overview
-Writing bank cheques manually can lead to spelling mistakes, incorrect date formatting, and poor readability. This application automates the process by generating perfectly formatted cheque printouts, utilizing custom layouts for major Sri Lankan banks.
+Writing bank cheques manually can lead to spelling mistakes, incorrect date formatting, and poor readability. **Growvia Cheque Writer** automates the process by generating perfectly formatted cheque printouts, utilizing standard layouts for major Sri Lankan banks adhering strictly to Central Bank of Sri Lanka (CBSL) and LankaPay CITS regulations.
 
 ## Key Features
-- **Multiple Bank Layouts**: Pre-configured support for Bank of Ceylon (BOC), Hatton National Bank (HNB), and Seylan Bank. Custom JSON configurations allow easily adding new banks.
-- **Automatic Amount to Words**: Translates numeric amounts (e.g. `1500.50`) into standard cheque words automatically (e.g. `**One Thousand Five Hundred and Cents Fifty Only**`).
+- **Universal A4 Printing**: Eliminates paper mismatch errors and the need to register custom forms in Windows `Print Server Properties`. Prints as standard A4 with automatic center-feed (16.1 mm margins) or left-feed placement.
+- **Official CITS Dimensions**: Standardized to the official Sri Lankan banking size: **7.00" × 3.50" (177.8 × 88.9 mm)**.
+- **Multiple Bank Layouts**: Pre-configured support for:
+  - Bank of Ceylon (BOC)
+  - Commercial Bank of Ceylon (COMBANK)
+  - Hatton National Bank (HNB)
+  - Sampath Bank (SAMPATH)
+  - Seylan Bank (Seylan)
+- **Live On-Screen Visual Preview**: Real-time rendering canvas inside the application displaying exact text, amount, crossing stamps, and placement. Toggle between Zoomed Cheque view and full A4 Paper view.
+- **Passcode-Protected Settings (`0000`)**: Administrative settings (paper feed, print alignment offsets, date fine-tuning, and year format) are safely locked behind **`🔒 More Options`** with a simple passcode.
+- **Smart 3-Line Word Wrapping**: Amounts in words automatically flow across up to 3 lines at full, uniform font size without shrinking or colliding with the price box.
+- **Native Direct 1-Click Print**: Sends print jobs directly to your selected Windows printer without requiring external software. Includes dedicated PDF preview for optional digital verification.
+- **Plain Paper Alignment Test**: Print a test page on plain A4 paper with dashed cheque outlines to overlay over a physical cheque leaf against a light source for zero-waste calibration.
+- **Automatic Amount to Words**: Translates numeric amounts (e.g. `1500.50`) into standard cheque words automatically (e.g. `**One Thousand Five Hundred and 50/100 Only**`).
 - **Live Payee Autocomplete**: Uses a local SQLite database to save payee names and autocomplete them as you type, sorted by frequency of use.
-- **Interactive Print Alignment**: Provides horizontal and vertical alignment offset settings in millimeters directly in the UI to correct printer tray feeding issues. Saved persistently using registry settings.
-- **Reliable Browser Printing**: Bypasses unstable printer-driver APIs and crashes by compiling the cheque into a PDF and opening it in your default web browser for print preview and submission.
-- **Standalone Executable**: Compiles into a single `dist/ChequeWriter.exe` that runs on any Windows PC without Python or PyQt6 installed.
+- **2-Digit / 4-Digit Year Support**: Defaults to 2 digits (`'26`) to preserve pre-printed `20` on Sri Lankan bank cheques, with toggleable 4-digit support.
 
 ## Tech Stack
 - **Programming Language**: Python 3
@@ -28,82 +38,54 @@ git clone https://github.com/Ishan-malinda/Check_Writter_OpenSrc.git
 cd Check_Writter_OpenSrc
 ```
 
-2. Install dependencies:
+2. Set up virtual environment and install dependencies:
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt
 ```
 
 3. Run the application:
 ```bash
-python main.py
+run.bat
 ```
-
-## Standalone Executable
-To build a single-file executable that does not require Python or PyQt6 installed on target PCs:
+or
 ```bash
-pyinstaller ChequeWriter.spec
-```
-The output binary will be created at `dist/ChequeWriter.exe`.
-
-## Configuration
-### Bank Layout Specifications
-Each bank's cheque template is defined in a JSON file inside the `banks/` folder. All coordinate units are in millimeters (mm):
-- `cheque_width_mm` / `cheque_height_mm`: Dimensions of the physical cheque.
-- `year_digits`: Number of digits to print for the year (e.g. 2 for `26`, 4 for `2026`).
-- `fields`: Positioning parameters for:
-  - `date_dd` / `date_mm` / `date_yyyy`: Individual boxes for date digits.
-  - `payee`: Coordinates and width limits for the payee name.
-  - `amount_box`: Coordinates and width limits for the numeric amount.
-  - `amount_words` / `amount_words_line2`: Text coordinates for amount-in-words lines.
-  - `cross_x` / `cross_y`: Parameters for cheque crossing line origins.
-
-## Alignment Offsets (Registry Settings)
-If text is shifted when printed on paper:
-- Adjust the **Vertical Shift** (negative values shift text up; positive values shift text down).
-- Adjust the **Horizontal Shift** (negative values shift text left; positive values shift text right).
-- These configurations are saved automatically to `HKEY_CURRENT_USER\Software\Growvia\ChequeWriter` on Windows.
-
-## Browser Print Settings
-When printing the cheque PDF from your default browser, ensure the following settings are selected for perfect alignment:
-1. **Margins**: Set to **None** or **Minimum**.
-2. **Scale**: Set to **100%** (or Default). Do not select 'Fit to Page'.
-3. **Headers & Footers**: Ensure this checkbox is **unchecked** to avoid URLs or page numbers printing on the cheque.
-4. **Layout**: Set to **Landscape**.
-
-## File Architecture
-- `main.py`: Core GUI layout, event handling, PDF generator, and window coordinates offset logic.
-- `payee_db.py`: SQLite backend interface for tracking payee frequency history.
-- `amount_words.py`: Algorithmic parser to translate amounts into English words.
-- `banks/`: JSON template layouts for supported banks.
-- `ChequeWriter.spec`: PyInstaller script containing packaging data.
-- `run.bat`: Quick execution batch file.
-
-## SQLite Payees Database Schema
-The autocomplete system uses a table called `payees`:
-```sql
-CREATE TABLE IF NOT EXISTS payees (
-    id INTEGER PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL COLLATE NOCASE,
-    used_count INTEGER DEFAULT 1,
-    last_used TEXT DEFAULT (date('now'))
-);
+.\.venv\Scripts\python main.py
 ```
 
-## Security Standards
-- Payee names and numeric/word amounts are automatically wrapped in security markers `**` to prevent alteration.
-- Amount in words uses intelligent word-wrapping to split into two lines dynamically, ensuring no letters are clipped.
+## A4 Cheque Printing Mathematics
 
-## Autocomplete Behavior
-The payee dropdown appears as you start typing. It performs case-insensitive prefix matching, sorting suggestions by their usage frequency so that frequently printed payees appear at the top.
+```
+                  ◄─── 210.0 mm (A4 Width) ───►
+      ┌─────────────────────────────────────────────────┐
+      │          ◄── 177.8 mm (Cheque) ──►              │
+      │ 16.1 mm  ┌─────────────────────┐    16.1 mm     │
+      │  margin  │ Bank Cheque Leaf    │     margin     │
+      │          │ Payee: *********    │                │
+      │          │ Amount: *********   │                │
+      │          └─────────────────────┘                │
+      │                                                 │
+      │                  A4 Page                        │
+      │                (297.0 mm tall)                  │
+      │                                                 │
+      └─────────────────────────────────────────────────┘
+```
+
+- **A4 Sheet Dimensions**: 210.0 × 297.0 mm
+- **Cheque Dimensions**: 177.8 × 88.9 mm (7.00" × 3.50")
+- **Left / Right Tray Margin**: $\frac{210.0 - 177.8}{2} = \mathbf{16.1\text{ mm}}$
+- **Top Margin**: $\mathbf{0.0\text{ mm}}$ (leading edge enters printer first)
+
+## Paper Modes Supported
+1. **A4 - Center Feed (Standard / Recommended)**: Fits 90%+ of consumer and office desktop printers (Epson EcoTank L-series, Canon Pixma/MegaTank, HP SmartTank/LaserJet, Xerox WorkCentre). Insert cheque in center and adjust tray guides.
+2. **A4 - Left-Aligned Feed**: For printers with fixed left tray guides.
+3. **Custom Cheque Size (178 × 89 mm)**: Legacy mode for specialized cheque slip printers or custom Windows form configurations.
 
 ## Contributing
-Contributions are welcome! If you have updates to add a new bank layout configuration, please follow these steps:
-1. Measure your bank cheque dimensions and text coordinates in millimeters.
-2. Create a new JSON configuration inside the `banks/` folder.
-3. Open a Pull Request detailing the changes.
+Contributions are welcome! If you have updates to add a new bank layout configuration, create a JSON configuration inside the `banks/` folder and open a Pull Request.
 
 ## License
 This project is open-source and released under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Credits
-Developed by Growvia Solutions. Copyright 2026. All rights reserved.
+Developed by Growvia Solutions & Dev IMS. Copyright 2026. All rights reserved.

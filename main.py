@@ -12,15 +12,15 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QComboBox, QPushButton, QGroupBox, QFrame,
-    QDateEdit, QDoubleSpinBox, QSizePolicy, QScrollArea,
-    QMessageBox, QCompleter, QDialog, QStyle,
+    QLabel, QLineEdit, QComboBox, QPushButton, QFrame,
+    QDateEdit, QDoubleSpinBox, QSizePolicy, QMessageBox,
+    QCompleter, QRadioButton, QButtonGroup, QDialog,
 )
-from PyQt6.QtCore import Qt, QDate, QRectF, QSizeF, QMarginsF, QStringListModel, QSettings
+from PyQt6.QtCore import Qt, QDate, QRectF, QSizeF, QMarginsF, QStringListModel, QSettings, QObject, QEvent
 from PyQt6.QtGui import (
-    QPainter, QFont, QFontMetrics, QPen, QColor, QPageLayout, QPageSize, QPalette,
+    QPainter, QFont, QFontMetrics, QPen, QColor, QPageLayout, QPageSize, QPalette, QBrush, QIcon,
 )
-from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo, QPrintPreviewDialog, QPrintPreviewWidget
+from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 
 from amount_words import amount_to_words
 from payee_db import save_payee, search_payees, all_payees
@@ -33,13 +33,24 @@ if getattr(sys, "frozen", False):
         BANKS_DIR = Path(__file__).parent / "banks"
 else:
     BANKS_DIR = Path(__file__).parent / "banks"
+
 MM_TO_PX = 96 / 25.4
 
+# Paper & Feed Modes
+PAPER_MODE_A4_CENTER = "A4 - Center Feed (Standard)"
+PAPER_MODE_A4_LEFT = "A4 - Left-Aligned Feed"
+PAPER_MODE_EXACT = "Custom Cheque Size (178 x 89 mm)"
+PAPER_MODES = [
+    PAPER_MODE_A4_CENTER,
+    PAPER_MODE_A4_LEFT,
+    PAPER_MODE_EXACT,
+]
+
 CROSS_MODES = [
+    "Cross Only",
     "Cross A/C Payee + Or Bearer",
     "Cross A/C Payee + Not Negotiable + Or Bearer",
     "Cross A/C Payee",
-    "Cross Only",
     "No Crossing",
 ]
 
@@ -51,7 +62,6 @@ def mm(value: float) -> float:
 def resource_path(name: str) -> Path:
     """Locate a bundled file whether running frozen (PyInstaller) or from source."""
     if getattr(sys, "frozen", False):
-        # onefile build extracts datas to _MEIPASS; also check next to the exe
         for base in (getattr(sys, "_MEIPASS", None), Path(sys.executable).parent):
             if base:
                 cand = Path(base) / name
@@ -64,8 +74,11 @@ def resource_path(name: str) -> Path:
 def load_banks() -> dict:
     banks = {}
     for f in sorted(BANKS_DIR.glob("*.json")):
-        data = json.loads(f.read_text())
-        banks[data["short"]] = data
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            banks[data["short"]] = data
+        except Exception:
+            pass
     return banks
 
 
@@ -75,8 +88,16 @@ def star(text: str) -> str:
 
 
 class ChequeRenderer:
+    FONT = "Times New Roman"
+
     def __init__(self, bank_config: dict, payee: str, amount: float,
-                 cheque_date: str, cross_mode: str, x_offset_mm: float = 0.0, y_offset_mm: float = 0.0):
+                 cheque_date: str, cross_mode: str,
+                 x_offset_mm: float = 0.0, y_offset_mm: float = 0.0,
+                 paper_mode: str = PAPER_MODE_A4_CENTER,
+                 draw_guidelines: bool = False,
+                 year_digits: int = 2,
+                 date_x_offset_mm: float = 0.0,
+                 date_y_offset_mm: float = 0.0):
         self.cfg = bank_config
         self.payee = payee
         self.amount = amount
@@ -84,8 +105,31 @@ class ChequeRenderer:
         self.cross_mode = cross_mode
         self.x_offset_mm = x_offset_mm
         self.y_offset_mm = y_offset_mm
+        self.paper_mode = paper_mode
+        self.draw_guidelines = draw_guidelines
+        self.year_digits = year_digits
+        self.date_x_offset_mm = date_x_offset_mm
+        self.date_y_offset_mm = date_y_offset_mm
 
-    FONT = "Times New Roman"
+        cheque_w = self.cfg.get("cheque_width_mm", 177.8)
+        if self.paper_mode == PAPER_MODE_A4_CENTER:
+            # Center on 210mm A4 sheet: (210 - 177.8) / 2 = 16.1 mm
+            self.base_x_mm = (210.0 - cheque_w) / 2.0
+            self.base_y_mm = 0.0
+        elif self.paper_mode == PAPER_MODE_A4_LEFT:
+            self.base_x_mm = 0.0
+            self.base_y_mm = 0.0
+        else:
+            self.base_x_mm = 0.0
+            self.base_y_mm = 0.0
+
+    @property
+    def eff_x(self) -> float:
+        return self.base_x_mm + self.x_offset_mm
+
+    @property
+    def eff_y(self) -> float:
+        return self.base_y_mm + self.y_offset_mm
 
     def _make_font(self, font_size_mm: float, bold: bool = False) -> QFont:
         font = QFont(self.FONT)
@@ -100,108 +144,134 @@ class ChequeRenderer:
         font = self._make_font(font_size_mm, bold)
         painter.setFont(font)
         painter.setPen(QPen(QColor(0, 0, 0)))
-        rect = QRectF(mm(x_mm + self.x_offset_mm), mm(y_mm + self.y_offset_mm) - mm(font_size_mm),
+        rect = QRectF(mm(x_mm + self.eff_x), mm(y_mm + self.eff_y) - mm(font_size_mm),
                       mm(max_width_mm), mm(font_size_mm * 1.4))
         painter.drawText(rect, align, text)
 
-    def _split_by_width(self, text: str, font_size_mm: float, max_width_mm: float,
-                        prefix: str = "", suffix: str = "") -> tuple[str, str]:
-        """Split text at a word boundary using real font metrics.
-
-        prefix/suffix are added when measuring line 1 (e.g. '**') so the
-        rendered width matches the measured width exactly.
-        """
+    def _wrap_words_to_lines(self, text: str, font_size_mm: float,
+                             line_limits_mm: list[float],
+                             prefix: str = "**", suffix: str = "**") -> list[str]:
         fm = QFontMetrics(self._make_font(font_size_mm))
-        max_px = int(mm(max_width_mm))
-        word_list = text.split()
-        line1_words: list[str] = []
-        for i, word in enumerate(word_list):
-            candidate = prefix + " ".join(line1_words + [word]) + (suffix if i == len(word_list) - 1 else "")
-            if fm.horizontalAdvance(candidate) > max_px:
-                line2 = " ".join(word_list[i:])
-                return " ".join(line1_words), line2
-            line1_words.append(word)
-        return " ".join(line1_words), ""
+        words = text.split()
+        if not words:
+            return []
+
+        lines: list[str] = []
+        curr_words: list[str] = []
+
+        for i, w in enumerate(words):
+            line_idx = len(lines)
+            is_first = (line_idx == 0 and len(curr_words) == 0)
+            is_last = (i == len(words) - 1)
+
+            test_line = (prefix if line_idx == 0 else "") + " ".join(curr_words + [w]) + (suffix if is_last else "")
+            test_px = fm.horizontalAdvance(test_line)
+
+            max_limit_mm = line_limits_mm[min(line_idx, len(line_limits_mm) - 1)]
+            max_limit_px = int(mm(max_limit_mm))
+
+            if test_px > max_limit_px and curr_words:
+                cur_p = prefix if line_idx == 0 else ""
+                lines.append(cur_p + " ".join(curr_words))
+                curr_words = [w]
+            else:
+                curr_words.append(w)
+
+        if curr_words:
+            line_idx = len(lines)
+            cur_p = prefix if line_idx == 0 else ""
+            lines.append(cur_p + " ".join(curr_words) + suffix)
+
+        return lines
 
     def _draw_date_boxes(self, painter: QPainter):
         f = self.cfg["fields"]
         parts = self.cheque_date.replace(" ", "").split("/")
         dd   = parts[0].zfill(2) if len(parts) > 0 else "  "
         mm_s = parts[1].zfill(2) if len(parts) > 1 else "  "
-        # year_digits in JSON controls how many digits to print (2 or 4)
-        year_digits = self.cfg.get("year_digits", 4)
         raw_year = parts[2] if len(parts) > 2 else ""
-        yy = raw_year[-year_digits:].zfill(year_digits)
+        digits = self.year_digits
+        yy = raw_year[-digits:].zfill(digits)
 
         fdd   = f["date_dd"]
         fmm   = f["date_mm"]
         fyyyy = f["date_yyyy"]
-        spacing = fdd.get("letter_spacing_mm", 4.2)
-        fs = fdd["font_size"]
+        spacing = fdd.get("letter_spacing_mm", 5.6)
+        fs = fdd.get("font_size", 5.0)
+
+        dx = self.date_x_offset_mm
+        dy = self.date_y_offset_mm
 
         for i, ch in enumerate(dd):
-            self._draw_text(painter, fdd["x"] + i * spacing, fdd["y"], ch, fs,
+            self._draw_text(painter, fdd["x"] + dx + i * spacing, fdd["y"] + dy, ch, fs,
                             align=Qt.AlignmentFlag.AlignHCenter, max_width_mm=spacing)
         for i, ch in enumerate(mm_s):
-            self._draw_text(painter, fmm["x"] + i * spacing, fmm["y"], ch, fs,
+            self._draw_text(painter, fmm["x"] + dx + i * spacing, fmm["y"] + dy, ch, fs,
                             align=Qt.AlignmentFlag.AlignHCenter, max_width_mm=spacing)
-        shift = 4 - year_digits
+        shift = 4 - digits
         for i, ch in enumerate(yy):
-            self._draw_text(painter, fyyyy["x"] + (i + shift) * spacing, fyyyy["y"], ch, fs,
+            self._draw_text(painter, fyyyy["x"] + dx + (i + shift) * spacing, fyyyy["y"] + dy, ch, fs,
                             align=Qt.AlignmentFlag.AlignHCenter, max_width_mm=spacing)
 
     def render(self, painter: QPainter):
         f = self.cfg["fields"]
+        cheque_w = self.cfg.get("cheque_width_mm", 177.8)
+        cheque_h = self.cfg.get("cheque_height_mm", 88.9)
 
-        # Date digits into boxes
+        if self.draw_guidelines:
+            pen = QPen(QColor(13, 148, 136), mm(0.35), Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(QRectF(mm(self.eff_x), mm(self.eff_y), mm(cheque_w), mm(cheque_h)))
+
+        # Date digits
         self._draw_date_boxes(painter)
 
-        # Payee — wrapped with ** **, not bold (cheque font is plain)
+        # Payee
         pf = f["payee"]
         self._draw_text(painter, pf["x"], pf["y"], star(self.payee),
                         pf["font_size"], bold=False,
                         max_width_mm=pf.get("max_width", 130))
 
-        # Amount box — ** amount ** centred
+        # Amount box
         ab = f["amount_box"]
         align = (Qt.AlignmentFlag.AlignHCenter
                  if ab.get("align") == "center" else Qt.AlignmentFlag.AlignLeft)
         self._draw_text(painter, ab["x"], ab["y"],
                         star(f"{self.amount:,.2f}"),
                         ab["font_size"], bold=False,
-                        align=align, max_width_mm=ab.get("max_width", 54))
+                        align=align, max_width_mm=ab.get("max_width", 56))
 
-        # Amount in words — split using real font metrics so text never clips
+        # Amount in words
         words = amount_to_words(self.amount)
         aw  = f["amount_words"]
-        aw2 = f["amount_words_line2"]
-        max_w = aw.get("max_width", 93)
-        fs_w  = aw["font_size"]
+        aw2 = f.get("amount_words_line2", aw)
+        aw3 = f.get("amount_words_line3", {
+            "x": aw2["x"],
+            "y": aw2["y"] + 7.0,
+            "font_size": aw2.get("font_size", 5.0),
+            "max_width": 120.0
+        })
 
-        # Split measuring with the actual ** prefix/suffix so no word is clipped
-        part1, part2 = self._split_by_width(words, fs_w, max_w, prefix="**")
-        if part2:
-            line1 = "**" + part1
-            line2 = part2 + "**"
-        else:
-            line1 = star(part1)
-            line2 = ""
+        max_w1 = aw.get("max_width", 80.0)
+        max_w2 = aw2.get("max_width", 91.5)
+        max_w3 = aw3.get("max_width", 120.0)
+        fs_w   = aw.get("font_size", 5.0)
 
-        self._draw_text(painter, aw["x"], aw["y"], line1, fs_w, max_width_mm=max_w)
-        if line2:
-            self._draw_text(painter, aw2["x"], aw2["y"], line2, aw2["font_size"],
-                            max_width_mm=max_w)
+        lines = self._wrap_words_to_lines(words, fs_w, [max_w1, max_w2, max_w3], prefix="**", suffix="**")
+        line_cfgs = [aw, aw2, aw3]
+
+        for i, text_line in enumerate(lines[:3]):
+            cfg_i = line_cfgs[i]
+            max_limit = [max_w1, max_w2, max_w3][i]
+            self._draw_text(painter, cfg_i["x"], cfg_i["y"], text_line, fs_w,
+                            max_width_mm=max_limit)
 
         # Crossing
         if self.cross_mode != "No Crossing":
             self._draw_crossing(painter)
 
     def _draw_crossing(self, painter: QPainter):
-        """Draw two parallel diagonal lines with text between them (like a crossing stamp).
-
-        Lines run from upper-right → lower-left, matching the standard Sri Lankan
-        cheque crossing. All coordinates are in mm from the cheque origin.
-        """
         label_map = {
             "Cross A/C Payee + Or Bearer":                  ["A/C PAYEE ONLY"],
             "Cross A/C Payee + Not Negotiable + Or Bearer": ["NOT NEGOTIABLE", "A/C PAYEE ONLY"],
@@ -214,28 +284,22 @@ class ChequeRenderer:
         pen.setWidthF(mm(0.38))
         painter.setPen(pen)
 
-        # ── Two fixed diagonal lines ─────────────────────────────────────
-        # Line 1 (upper / closer to corner): top-right to bottom-left
-        # Tilted more clockwise (rotated to the right)
-        x1a, y1a = mm(2 + self.x_offset_mm),  mm(18 + self.y_offset_mm)   # bottom-left end
-        x1b, y1b = mm(24 + self.x_offset_mm), mm(3 + self.y_offset_mm)    # top-right end
+        x1a, y1a = mm(2 + self.eff_x),  mm(18 + self.eff_y)
+        x1b, y1b = mm(24 + self.eff_x), mm(3 + self.eff_y)
         painter.drawLine(int(x1a), int(y1a), int(x1b), int(y1b))
 
-        # Line 2 (lower): parallel, shifted 8 mm to the right/down for larger text space
         gap_mm = 8.0
         import math
-        angle_rad = math.atan2(y1a - y1b, x1b - x1a)   # angle of the line
+        angle_rad = math.atan2(y1a - y1b, x1b - x1a)
         dx = gap_mm * math.sin(angle_rad)
         dy = gap_mm * math.cos(angle_rad)
         x2a, y2a = x1a + mm(dx), y1a + mm(dy)
         x2b, y2b = x1b + mm(dx), y1b + mm(dy)
         painter.drawLine(int(x2a), int(y2a), int(x2b), int(y2b))
 
-        # ── Text centred between the two lines ───────────────────────────
         if not lines:
             return
 
-        # Mid-point between the two lines — shift right so 'A' isn't clipped
         mid_x = (x1a + x1b + x2a + x2b) / 4 + mm(3)
         mid_y = (y1a + y1b + y2a + y2b) / 4
         angle_deg = math.degrees(math.atan2(y1b - y1a, x1b - x1a))
@@ -244,7 +308,6 @@ class ChequeRenderer:
         painter.translate(mid_x, mid_y)
         painter.rotate(angle_deg)
 
-        # Larger font size for visibility (3.5 mm instead of 2.6 mm)
         font = self._make_font(3.5)
         painter.setFont(font)
         painter.setPen(QPen(QColor(0, 0, 0)))
@@ -260,7 +323,105 @@ class ChequeRenderer:
         painter.restore()
 
 
-# (PreviewWidget removed as we print directly to the printer now)
+class ChequePreviewWidget(QFrame):
+    """Clean interactive preview canvas showing live cheque rendering."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            "ChequePreviewWidget { background-color: #F1F5F9; border: 1.5px solid #E2E8F0; border-radius: 6px; }"
+        )
+        self.renderer: ChequeRenderer | None = None
+        self.show_a4_view = False
+
+    def set_renderer(self, renderer: ChequeRenderer, show_a4_view: bool = False):
+        self.renderer = renderer
+        self.show_a4_view = show_a4_view
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self.renderer:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+        w = self.width()
+        h = self.height()
+        cheque_w_mm = self.renderer.cfg.get("cheque_width_mm", 177.8)
+        cheque_h_mm = self.renderer.cfg.get("cheque_height_mm", 88.9)
+
+        if self.show_a4_view:
+            # Full A4 Page View (210 x 297 mm)
+            margin = 12
+            scale = min((w - margin * 2) / mm(210.0), (h - margin * 2) / mm(297.0))
+            offset_x = (w - mm(210.0) * scale) / 2.0
+            offset_y = (h - mm(297.0) * scale) / 2.0
+
+            painter.save()
+            painter.translate(offset_x, offset_y)
+            painter.scale(scale, scale)
+
+            # A4 Sheet with shadow
+            painter.setPen(QPen(QColor("#94A3B8"), 1))
+            painter.setBrush(QBrush(QColor("#FFFFFF")))
+            painter.drawRect(QRectF(0, 0, mm(210.0), mm(297.0)))
+
+            # Cheque Leaf area on A4
+            eff_x = self.renderer.eff_x
+            eff_y = self.renderer.eff_y
+            painter.setPen(QPen(QColor("#0D9488"), 1.2, Qt.PenStyle.DashLine))
+            painter.setBrush(QBrush(QColor("#ECFDF5")))
+            painter.drawRect(QRectF(mm(eff_x), mm(eff_y), mm(cheque_w_mm), mm(cheque_h_mm)))
+
+            self.renderer.render(painter)
+            painter.restore()
+        else:
+            # Zoomed Cheque View
+            margin = 16
+            scale = min((w - margin * 2) / mm(cheque_w_mm), (h - margin * 2) / mm(cheque_h_mm))
+            offset_x = (w - mm(cheque_w_mm) * scale) / 2.0
+            offset_y = (h - mm(cheque_h_mm) * scale) / 2.0
+
+            painter.save()
+            painter.translate(offset_x, offset_y)
+            painter.scale(scale, scale)
+
+            # Cheque background
+            painter.setPen(QPen(QColor("#0D9488"), 1.5))
+            painter.setBrush(QBrush(QColor("#F8FAF9")))
+            painter.drawRoundedRect(QRectF(0, 0, mm(cheque_w_mm), mm(cheque_h_mm)), 4, 4)
+
+            # Inner dotted border
+            painter.setPen(QPen(QColor("#A7F3D0"), 1, Qt.PenStyle.DotLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(QRectF(mm(2), mm(2), mm(cheque_w_mm - 4), mm(cheque_h_mm - 4)))
+
+            # Bank Watermark Title
+            bank_name = self.renderer.cfg.get("name", "BANK CHEQUE").upper()
+            painter.setFont(QFont("Times New Roman", int(mm(3.8)), QFont.Weight.Bold))
+            painter.setPen(QColor("#115E59"))
+            painter.drawText(QRectF(mm(18), mm(8), mm(100), mm(8)), Qt.AlignmentFlag.AlignLeft, bank_name)
+
+            orig_bx = self.renderer.base_x_mm
+            orig_by = self.renderer.base_y_mm
+            orig_ox = self.renderer.x_offset_mm
+            orig_oy = self.renderer.y_offset_mm
+            self.renderer.base_x_mm = 0.0
+            self.renderer.base_y_mm = 0.0
+            self.renderer.x_offset_mm = 0.0
+            self.renderer.y_offset_mm = 0.0
+
+            self.renderer.render(painter)
+
+            self.renderer.base_x_mm = orig_bx
+            self.renderer.base_y_mm = orig_by
+            self.renderer.x_offset_mm = orig_ox
+            self.renderer.y_offset_mm = orig_oy
+
+            painter.restore()
 
 
 class PayeeLineEdit(QLineEdit):
@@ -276,9 +437,9 @@ class PayeeLineEdit(QLineEdit):
         popup = self._completer.popup()
         if popup:
             popup.setStyleSheet(
-                "QListView { font-size: 14px; padding: 4px; color: #111; background: white; }"
-                "QListView::item { padding: 6px 8px; min-height: 28px; }"
-                "QListView::item:selected { background: #1a3c5e; color: white; }"
+                "QListView { font-size: 13px; padding: 4px; color: #111; background: white; }"
+                "QListView::item { padding: 4px 6px; min-height: 24px; }"
+                "QListView::item:selected { background: #0284C7; color: white; }"
             )
         self.setCompleter(self._completer)
         self.textEdited.connect(self._refresh_suggestions)
@@ -293,500 +454,280 @@ class PayeeLineEdit(QLineEdit):
             self._model.setStringList(all_payees())
 
 
-# ── Shared stylesheet applied to the whole app ──────────────────────────────
+class NoScrollComboBox(QComboBox):
+    """QComboBox that ignores mouse wheel scrolling so values never change accidentally."""
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoScrollDoubleSpinBox(QDoubleSpinBox):
+    """QDoubleSpinBox that ignores mouse wheel scrolling."""
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoScrollDateEdit(QDateEdit):
+    """QDateEdit that ignores mouse wheel scrolling."""
+    def wheelEvent(self, event):
+        event.ignore()
+
+
 APP_STYLE = """
 QMainWindow, QWidget {
-    background-color: #F0F4F8;
-    color: #1A2B3C;
+    background-color: #F8FAFC;
+    color: #1E293B;
     font-family: 'Segoe UI', Arial, sans-serif;
 }
 
-/* Section labels / group box titles */
-QGroupBox {
-    background-color: #FFFFFF;
-    border: 1px solid #D8E2EC;
-    border-radius: 8px;
-    margin-top: 10px;
-    padding: 12px 14px 10px 14px;
-    font-size: 11px;
-    font-weight: 600;
-    color: #5A7A96;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 12px;
-    top: -1px;
-    padding: 0 6px;
-    background-color: #FFFFFF;
-}
-
-/* All input fields */
 QLineEdit, QDateEdit, QDoubleSpinBox, QComboBox {
     background-color: #FFFFFF;
-    color: #1A2B3C;
-    border: 1.5px solid #C5D5E4;
+    color: #0F172A;
+    border: 1px solid #CBD5E1;
     border-radius: 6px;
-    padding: 8px 12px;
-    font-size: 14px;
-    selection-background-color: #1A5276;
+    padding: 6px 10px;
+    font-size: 13px;
+    selection-background-color: #0284C7;
     selection-color: #FFFFFF;
 }
 QLineEdit:focus, QDateEdit:focus, QDoubleSpinBox:focus, QComboBox:focus {
-    border: 2px solid #1A5276;
-    background-color: #FAFCFF;
+    border: 1.5px solid #0284C7;
+    background-color: #FFFFFF;
 }
 QLineEdit:hover, QDateEdit:hover, QDoubleSpinBox:hover, QComboBox:hover {
-    border-color: #7FAFC8;
+    border-color: #94A3B8;
 }
 
-/* Dropdown arrow */
 QComboBox::drop-down {
     border: none;
-    width: 28px;
+    width: 24px;
 }
 QComboBox::down-arrow {
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
 }
 QComboBox QAbstractItemView {
     background: #FFFFFF;
-    color: #1A2B3C;
-    border: 1px solid #C5D5E4;
+    color: #0F172A;
+    border: 1px solid #CBD5E1;
     border-radius: 4px;
     padding: 4px;
-    selection-background-color: #1A5276;
+    selection-background-color: #0284C7;
     selection-color: #FFFFFF;
     font-size: 13px;
 }
 
-/* Spin box buttons */
 QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
-    width: 22px;
-    background: #EAF0F6;
+    width: 20px;
+    background: #F1F5F9;
     border: none;
-    border-left: 1px solid #C5D5E4;
-    border-radius: 0px;
+    border-left: 1px solid #CBD5E1;
 }
 QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
-    background: #D0E2F0;
+    background: #E2E8F0;
 }
 
-/* Date edit calendar button */
 QDateEdit::drop-down {
-    width: 28px;
+    width: 24px;
     border: none;
-    background: #EAF0F6;
-    border-left: 1px solid #C5D5E4;
+    background: #F1F5F9;
+    border-left: 1px solid #CBD5E1;
     border-top-right-radius: 6px;
     border-bottom-right-radius: 6px;
 }
-QDateEdit::down-arrow {
-    width: 12px;
-    height: 12px;
-}
-
-/* Calendar popup */
-QCalendarWidget QWidget {
-    background-color: #FFFFFF;
-    color: #1A2B3C;
-    alternate-background-color: #F5F8FB;
-}
-QCalendarWidget QToolButton {
-    background-color: #1A5276;
-    color: #FFFFFF;
-    border: none;
-    border-radius: 4px;
-    padding: 4px 10px;
-    font-size: 13px;
-    font-weight: 600;
-}
-QCalendarWidget QToolButton:hover {
-    background-color: #1F618D;
-}
-QCalendarWidget QSpinBox {
-    background: #FFFFFF;
-    color: #1A2B3C;
-    border: 1px solid #C5D5E4;
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 13px;
-}
-QCalendarWidget QMenu {
-    background: #FFFFFF;
-    color: #1A2B3C;
-    border: 1px solid #C5D5E4;
-}
-QCalendarWidget QAbstractItemView:enabled {
-    background-color: #FFFFFF;
-    color: #1A2B3C;
-    selection-background-color: #1A5276;
-    selection-color: #FFFFFF;
-    font-size: 12px;
-}
-QCalendarWidget QAbstractItemView:disabled {
-    color: #B0C4D4;
-}
-/* Header row (Sun Mon Tue ...) */
-QCalendarWidget QHeaderView {
-    background-color: #EAF0F6;
-    color: #5A7A96;
-    font-size: 11px;
-    font-weight: 600;
-}
-QCalendarWidget QHeaderView::section {
-    background-color: #EAF0F6;
-    color: #5A7A96;
-    border: none;
-    padding: 4px;
-}
-
-/* Scrollbar */
-QScrollBar:vertical {
-    background: #EAF0F6;
-    width: 8px;
-    border-radius: 4px;
-}
-QScrollBar::handle:vertical {
-    background: #A0BDD0;
-    border-radius: 4px;
-    min-height: 30px;
-}
 """
 
-PAYEE_FIELD_STYLE = """
+PAYEE_STYLE = """
 QLineEdit {
-    font-size: 17px;
-    font-weight: 500;
-    color: #0D1B2A;
+    font-size: 14px;
+    font-weight: 600;
+    color: #0F172A;
     background-color: #FFFFFF;
-    border: 2px solid #C5D5E4;
-    border-radius: 7px;
-    padding: 11px 14px;
-    letter-spacing: 0.2px;
+    border: 1.5px solid #CBD5E1;
+    border-radius: 6px;
+    padding: 7px 10px;
 }
 QLineEdit:focus {
-    border: 2.5px solid #1A5276;
-    background-color: #FAFCFF;
-}
-QLineEdit:hover {
-    border-color: #5B9BBD;
+    border: 2px solid #0284C7;
 }
 """
 
 
-def _list_printers() -> list[str]:
-    """Return installed printer names using PowerShell — no extra dependencies."""
-    try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-command",
-             "Get-Printer | Select-Object -ExpandProperty Name"],
-            capture_output=True, text=True, timeout=8
-        )
-        names = [p.strip() for p in r.stdout.splitlines() if p.strip()]
-        return names if names else ["Default Printer"]
-    except Exception:
-        return ["Default Printer"]
-
-
-class PrintDialog(QDialog):
-    """Printer + paper-size selector — avoids the broken Windows 11 modern dialog."""
-
-    def __init__(self, cheque_w_mm: float, cheque_h_mm: float, parent=None):
+class PasscodeDialog(QDialog):
+    """Simple passcode prompt to unlock advanced settings."""
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.cheque_w_mm = cheque_w_mm
-        self.cheque_h_mm = cheque_h_mm
-        self.setWindowTitle("Print Cheque")
-        self.setMinimumWidth(400)
-        self.setStyleSheet(APP_STYLE)
+        self.setWindowTitle("Settings Security")
+        self.setFixedSize(310, 150)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
 
-        lay = QVBoxLayout(self)
-        lay.setSpacing(12)
-        lay.setContentsMargins(20, 20, 20, 20)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(10)
 
-        # ── Printer ───────────────────────────────────────────────────────
-        lay.addWidget(QLabel("Printer:"))
-        self.printer_combo = QComboBox()
-        self.printer_combo.setMinimumHeight(38)
-        for info in QPrinterInfo.availablePrinters():
-            self.printer_combo.addItem(info.printerName())
-        # Highlight default printer
-        default = QPrinterInfo.defaultPrinterName()
-        idx = self.printer_combo.findText(default)
-        if idx >= 0:
-            self.printer_combo.setCurrentIndex(idx)
-        self.printer_combo.currentIndexChanged.connect(self._on_printer_changed)
-        lay.addWidget(self.printer_combo)
+        lbl = QLabel("Enter passcode to unlock More Options:")
+        lbl.setStyleSheet("font-size: 12px; font-weight: 600; color: #1E293B;")
+        layout.addWidget(lbl)
 
-        # ── Paper size ────────────────────────────────────────────────────
-        lay.addWidget(QLabel("Paper Size:"))
-        self.size_combo = QComboBox()
-        self.size_combo.setMinimumHeight(38)
-        lay.addWidget(self.size_combo)
-
-        # ── Orientation ───────────────────────────────────────────────────
-        lay.addWidget(QLabel("Orientation:"))
-        self.orientation_combo = QComboBox()
-        self.orientation_combo.setMinimumHeight(38)
-        self.orientation_combo.addItem("Landscape", QPageLayout.Orientation.Landscape)
-        self.orientation_combo.addItem("Portrait", QPageLayout.Orientation.Portrait)
-        self.orientation_combo.setCurrentIndex(0) # Default to Landscape
-        lay.addWidget(self.orientation_combo)
-
-        # Populate sizes for initial printer
-        self._on_printer_changed()
-
-        # ── Buttons ───────────────────────────────────────────────────────
-        btns = QHBoxLayout()
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setMinimumHeight(38)
-        cancel_btn.clicked.connect(self.reject)
-
-        print_btn = QPushButton("  Print  ")
-        print_btn.setMinimumHeight(38)
-        print_btn.setStyleSheet(
-            "background-color:#1A5276; color:white; font-weight:600;"
-            "border-radius:6px; padding:6px 28px;"
+        self.code_edit = QLineEdit()
+        self.code_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.code_edit.setPlaceholderText("Passcode (0000)")
+        self.code_edit.setMaxLength(10)
+        self.code_edit.setMinimumHeight(32)
+        self.code_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.code_edit.setStyleSheet(
+            "QLineEdit { font-size: 15px; letter-spacing: 4px; font-weight: 700; border: 1.5px solid #CBD5E1; border-radius: 6px; padding: 4px; }"
+            "QLineEdit:focus { border-color: #0284C7; }"
         )
-        print_btn.clicked.connect(self.accept)
+        layout.addWidget(self.code_edit)
 
-        btns.addStretch()
-        btns.addWidget(cancel_btn)
-        btns.addSpacing(8)
-        btns.addWidget(print_btn)
-        lay.addLayout(btns)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
 
-    def _on_printer_changed(self):
-        """Reload paper sizes whenever the printer selection changes."""
-        self.size_combo.clear()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setMinimumHeight(32)
+        cancel_btn.setStyleSheet(
+            "QPushButton { background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 6px; font-size: 12px; font-weight: 600; color: #475569; }"
+            "QPushButton:hover { background: #E2E8F0; }"
+        )
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
 
-        # 1. Add the custom cheque page size as the first option
-        cheque_size = QPageSize(QSizeF(self.cheque_h_mm, self.cheque_w_mm), QPageSize.Unit.Millimeter, "Cheque")
-        label = f"Cheque Size  ({self.cheque_w_mm:.0f} × {self.cheque_h_mm:.0f} mm)"
-        self.size_combo.addItem(label, cheque_size)
+        unlock_btn = QPushButton("Unlock")
+        unlock_btn.setMinimumHeight(32)
+        unlock_btn.setStyleSheet(
+            "QPushButton { background: #0284C7; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 700; }"
+            "QPushButton:hover { background: #0369A1; }"
+        )
+        unlock_btn.clicked.connect(self.accept)
+        btn_row.addWidget(unlock_btn)
 
-        # 2. Add all other supported page sizes
-        name = self.printer_combo.currentText()
-        info = QPrinterInfo.printerInfo(name)
-        sizes = info.supportedPageSizes()
-        for ps in sizes:
-            w = ps.size(QPageSize.Unit.Millimeter).width()
-            h = ps.size(QPageSize.Unit.Millimeter).height()
-            longer = max(w, h)
-            shorter = min(w, h)
-            # Skip if it matches the custom cheque size to avoid duplicates
-            if abs(longer - self.cheque_w_mm) < 1.0 and abs(shorter - self.cheque_h_mm) < 1.0:
-                continue
-            label = f"{ps.name()}  ({w:.0f} × {h:.0f} mm)"
-            self.size_combo.addItem(label, ps)
+        layout.addLayout(btn_row)
 
-        # 3. Always default to the custom Cheque Size
-        self.size_combo.setCurrentIndex(0)
+        self.code_edit.returnPressed.connect(self.accept)
+        self.code_edit.setFocus()
 
-    def printer_name(self) -> str:
-        return self.printer_combo.currentText()
-
-    def selected_page_size(self) -> QPageSize | None:
-        return self.size_combo.currentData()
-
-    def selected_orientation(self) -> QPageLayout.Orientation:
-        return self.orientation_combo.currentData()
+    def get_passcode(self) -> str:
+        return self.code_edit.text()
 
 
 class MainWindow(QMainWindow):
     def __init__(self, banks: dict):
         super().__init__()
         self.banks = banks
-        self.setWindowTitle("Cheque Writer by Dev IMS")
-        self.setMinimumWidth(560)
+        self.setWindowTitle("Growvia Cheque Writer")
+        icon_cand = resource_path("icon.png")
+        if not icon_cand.exists():
+            icon_cand = resource_path("icon.ico")
+        if icon_cand.exists():
+            self.setWindowIcon(QIcon(str(icon_cand)))
+        self.setMinimumSize(960, 480)
 
-        # Force light palette so system dark mode doesn't override our stylesheet
         pal = QPalette()
-        pal.setColor(QPalette.ColorRole.Window, QColor("#F0F4F8"))
-        pal.setColor(QPalette.ColorRole.WindowText, QColor("#1A2B3C"))
+        pal.setColor(QPalette.ColorRole.Window, QColor("#F8FAFC"))
+        pal.setColor(QPalette.ColorRole.WindowText, QColor("#1E293B"))
         pal.setColor(QPalette.ColorRole.Base, QColor("#FFFFFF"))
-        pal.setColor(QPalette.ColorRole.Text, QColor("#1A2B3C"))
-        pal.setColor(QPalette.ColorRole.Button, QColor("#FFFFFF"))
-        pal.setColor(QPalette.ColorRole.ButtonText, QColor("#1A2B3C"))
-        pal.setColor(QPalette.ColorRole.PlaceholderText, QColor("#9BAFC0"))
+        pal.setColor(QPalette.ColorRole.Text, QColor("#0F172A"))
         self.setPalette(pal)
         self.setStyleSheet(APP_STYLE)
 
+        self.settings = QSettings("Growvia", "ChequeWriter")
+
         central = QWidget()
-        root = QVBoxLayout(central)
-        root.setSpacing(10)
-        root.setContentsMargins(20, 16, 20, 16)
+        main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(14, 12, 14, 12)
+        main_layout.setSpacing(14)
 
-        # ── Header ──────────────────────────────────────────────────────────
-        header = QWidget()
-        header.setStyleSheet("background: transparent;")
-        h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(0, 0, 0, 8)
-
-        title = QLabel("Cheque Writer")
-        title.setStyleSheet(
-            "font-size: 24px; font-weight: 700; color: #1A3C5E; letter-spacing: -0.5px;"
+        # ══════════════════════════════════════════════════════════════════════
+        # LEFT COLUMN: INPUT FORM & ACTIONS
+        # ══════════════════════════════════════════════════════════════════════
+        left_card = QFrame()
+        left_card.setStyleSheet(
+            "QFrame { background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; }"
         )
-        subtitle = QLabel("Sri Lankan Bank Cheque Printing")
-        subtitle.setStyleSheet("font-size: 12px; color: #7A96AA; margin-top: 4px;")
-        title_col = QVBoxLayout()
-        title_col.setSpacing(2)
-        title_col.addWidget(title)
-        title_col.addWidget(subtitle)
-        h_layout.addLayout(title_col)
-        h_layout.addStretch()
-        root.addWidget(header)
+        left_layout = QVBoxLayout(left_card)
+        left_layout.setContentsMargins(14, 14, 14, 14)
+        left_layout.setSpacing(9)
 
-        # Thin divider under header
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("background: #D8E2EC; border: none; max-height: 1px;")
-        root.addWidget(line)
+        # Section Title
+        sec_title = QLabel("CHEQUE DETAILS")
+        sec_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #64748B; letter-spacing: 0.5px;")
+        left_layout.addWidget(sec_title)
 
-        # ── Bank + Date ──────────────────────────────────────────────────────
-        top_row = QHBoxLayout()
-        top_row.setSpacing(12)
+        # Row 1: Bank + Date
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
 
-        bank_grp = QGroupBox("Bank")
-        bank_inner = QVBoxLayout(bank_grp)
-        bank_inner.setContentsMargins(12, 18, 12, 12)
-        self.bank_combo = QComboBox()
-        self.bank_combo.setMinimumHeight(40)
+        self.bank_combo = NoScrollComboBox()
+        self.bank_combo.setMinimumHeight(34)
         for short in self.banks:
             self.bank_combo.addItem(self.banks[short]["name"], short)
         self.bank_combo.currentIndexChanged.connect(self._on_change)
-        bank_inner.addWidget(self.bank_combo)
-        top_row.addWidget(bank_grp, stretch=3)
+        row1.addWidget(self.bank_combo, stretch=3)
 
-        date_grp = QGroupBox("Cheque Date")
-        date_inner = QVBoxLayout(date_grp)
-        date_inner.setContentsMargins(12, 18, 12, 12)
-        self.date_edit = QDateEdit(QDate.currentDate())
+        self.date_edit = NoScrollDateEdit(QDate.currentDate())
         self.date_edit.setDisplayFormat("dd / MM / yyyy")
         self.date_edit.setCalendarPopup(True)
-        self.date_edit.setMinimumHeight(40)
+        self.date_edit.setMinimumHeight(34)
         self.date_edit.dateChanged.connect(self._on_change)
-        date_inner.addWidget(self.date_edit)
-        top_row.addWidget(date_grp, stretch=2)
+        row1.addWidget(self.date_edit, stretch=2)
+        left_layout.addLayout(row1)
 
-        root.addLayout(top_row)
-
-        # ── Pay To ───────────────────────────────────────────────────────────
-        payee_grp = QGroupBox("Pay To")
-        payee_inner = QVBoxLayout(payee_grp)
-        payee_inner.setContentsMargins(12, 18, 12, 12)
-        payee_inner.setSpacing(7)
-
+        # Row 2: Pay To
         self.payee_edit = PayeeLineEdit()
-        self.payee_edit.setPlaceholderText("Enter payee full name...")
-        self.payee_edit.setStyleSheet(PAYEE_FIELD_STYLE)
-        self.payee_edit.setMinimumHeight(50)
+        self.payee_edit.setPlaceholderText("Pay To (e.g. MR. SAMPATH PERERA)...")
+        self.payee_edit.setStyleSheet(PAYEE_STYLE)
+        self.payee_edit.setMinimumHeight(36)
         self.payee_edit.textChanged.connect(self._on_change)
-        payee_inner.addWidget(self.payee_edit)
-        root.addWidget(payee_grp)
+        left_layout.addWidget(self.payee_edit)
 
-        # ── Amount + Crossing ────────────────────────────────────────────────
-        mid_row = QHBoxLayout()
-        mid_row.setSpacing(12)
+        # Row 3: Amount + Crossing
+        row3 = QHBoxLayout()
+        row3.setSpacing(8)
 
-        amount_grp = QGroupBox("Amount (Rs.)")
-        amount_inner = QVBoxLayout(amount_grp)
-        amount_inner.setContentsMargins(12, 18, 12, 12)
-        amount_inner.setSpacing(8)
-        self.amount_spin = QDoubleSpinBox()
+        self.amount_spin = NoScrollDoubleSpinBox()
         self.amount_spin.setRange(0.01, 99_999_999.99)
         self.amount_spin.setDecimals(2)
         self.amount_spin.setSingleStep(100)
-        self.amount_spin.setValue(1000.00)
+        self.amount_spin.setValue(800.00)
         self.amount_spin.setGroupSeparatorShown(True)
-        self.amount_spin.setMinimumHeight(42)
-        self.amount_spin.setStyleSheet(
-            "QDoubleSpinBox { font-size: 16px; font-weight: 600; color: #0D3B6E; }"
-        )
+        self.amount_spin.setMinimumHeight(34)
+        self.amount_spin.setStyleSheet("font-size: 15px; font-weight: 700; color: #0284C7;")
         self.amount_spin.valueChanged.connect(self._on_change)
-        amount_inner.addWidget(self.amount_spin)
+        row3.addWidget(self.amount_spin, stretch=2)
 
-        self.words_label = QLabel()
-        self.words_label.setStyleSheet(
-            "color: #5B7A96; font-size: 11px; font-style: italic; padding-left: 2px;"
-        )
-        self.words_label.setWordWrap(True)
-        amount_inner.addWidget(self.words_label)
-        mid_row.addWidget(amount_grp, stretch=3)
-
-        cross_grp = QGroupBox("Crossing Mode")
-        cross_inner = QVBoxLayout(cross_grp)
-        cross_inner.setContentsMargins(12, 18, 12, 12)
-        self.cross_combo = QComboBox()
-        self.cross_combo.setMinimumHeight(40)
+        self.cross_combo = NoScrollComboBox()
+        self.cross_combo.setMinimumHeight(34)
         for m in CROSS_MODES:
             self.cross_combo.addItem(m)
         self.cross_combo.setCurrentIndex(0)
         self.cross_combo.currentIndexChanged.connect(self._on_change)
-        cross_inner.addWidget(self.cross_combo)
-        cross_inner.addStretch()
-        mid_row.addWidget(cross_grp, stretch=2)
+        row3.addWidget(self.cross_combo, stretch=3)
+        left_layout.addLayout(row3)
 
-        root.addLayout(mid_row)
+        # Words Label (Auto-updating)
+        self.words_label = QLabel()
+        self.words_label.setStyleSheet("color: #64748B; font-size: 11px; font-style: italic; padding-left: 2px;")
+        self.words_label.setWordWrap(True)
+        left_layout.addWidget(self.words_label)
 
-        # ── Alignment Offsets ────────────────────────────────────────────────
-        offset_grp = QGroupBox("Print Alignment Adjustment (mm)")
-        offset_inner = QHBoxLayout(offset_grp)
-        offset_inner.setContentsMargins(12, 18, 12, 12)
-        offset_inner.setSpacing(16)
+        # Divider
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet("background: #F1F5F9; border: none; max-height: 1px;")
+        left_layout.addWidget(div)
 
-        # Horizontal Offset
-        h_layout = QHBoxLayout()
-        h_layout.addWidget(QLabel("Horizontal Shift (Left/Right):"))
-        self.x_offset_spin = QDoubleSpinBox()
-        self.x_offset_spin.setRange(-50.0, 50.0)
-        self.x_offset_spin.setSingleStep(0.5)
-        self.x_offset_spin.setSuffix(" mm")
-        self.x_offset_spin.setMinimumHeight(36)
-        h_layout.addWidget(self.x_offset_spin)
-        offset_inner.addLayout(h_layout)
+        # Row 4: Printer selection
+        row4 = QHBoxLayout()
+        row4.setSpacing(8)
 
-        # Vertical Offset
-        v_layout = QHBoxLayout()
-        v_layout.addWidget(QLabel("Vertical Shift (Up/Down):"))
-        self.y_offset_spin = QDoubleSpinBox()
-        self.y_offset_spin.setRange(-50.0, 50.0)
-        self.y_offset_spin.setSingleStep(0.5)
-        self.y_offset_spin.setSuffix(" mm")
-        self.y_offset_spin.setMinimumHeight(36)
-        v_layout.addWidget(self.y_offset_spin)
-        offset_inner.addLayout(v_layout)
+        print_lbl = QLabel("Printer:")
+        print_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #64748B;")
+        row4.addWidget(print_lbl)
 
-        # Load saved values from QSettings
-        self.settings = QSettings("Growvia", "ChequeWriter")
-        saved_x = self.settings.value("x_offset", 0.0)
-        saved_y = self.settings.value("y_offset", 0.0)
-        try:
-            self.x_offset_spin.setValue(float(saved_x))
-        except (ValueError, TypeError):
-            self.x_offset_spin.setValue(0.0)
-        try:
-            self.y_offset_spin.setValue(float(saved_y))
-        except (ValueError, TypeError):
-            self.y_offset_spin.setValue(0.0)
-
-        # Connect slots
-        self.x_offset_spin.valueChanged.connect(self._on_offset_changed)
-        self.y_offset_spin.valueChanged.connect(self._on_offset_changed)
-
-        root.addWidget(offset_grp)
-
-        # ── Printer ──────────────────────────────────────────────────────────
-        printer_grp = QGroupBox("Printer")
-        printer_inner = QVBoxLayout(printer_grp)
-        printer_inner.setContentsMargins(12, 18, 12, 12)
-        self.printer_combo = QComboBox()
-        self.printer_combo.setMinimumHeight(40)
+        self.printer_combo = NoScrollComboBox()
+        self.printer_combo.setMinimumHeight(34)
         for info in QPrinterInfo.availablePrinters():
             self.printer_combo.addItem(info.printerName())
-        # Restore last used printer, else fall back to the system default
         saved_printer = self.settings.value("printer", "")
         idx = self.printer_combo.findText(saved_printer) if saved_printer else -1
         if idx < 0:
@@ -796,123 +737,378 @@ class MainWindow(QMainWindow):
         self.printer_combo.currentIndexChanged.connect(
             lambda: self.settings.setValue("printer", self.printer_combo.currentText())
         )
-        printer_inner.addWidget(self.printer_combo)
+        row4.addWidget(self.printer_combo, stretch=1)
+        left_layout.addLayout(row4)
 
-        # Cheque paper-size name — forces this size per job, so the printer's
-        # DEFAULT paper (e.g. A4) can stay unchanged for normal printing.
-        # Must match the custom paper size name created in Windows exactly.
-        paper_row = QHBoxLayout()
-        paper_row.addWidget(QLabel("Cheque Paper Size Name:"))
-        self.paper_name_edit = QLineEdit()
-        self.paper_name_edit.setMinimumHeight(36)
-        self.paper_name_edit.setText(self.settings.value("paper_name", "Check SL"))
-        self.paper_name_edit.setToolTip(
-            "Must exactly match the custom paper size name created in Windows "
-            "(Print Server Properties), e.g. 'Check SL'. Leave blank to use the "
-            "printer's default paper."
+        # More Options Toggle (Collapsible with Passcode Protection)
+        self.more_options_btn = QPushButton("🔒 More Options ▾")
+        self.more_options_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.more_options_btn.setStyleSheet(
+            "QPushButton {"
+            "  background: transparent; color: #64748B; font-size: 11px; font-weight: 600;"
+            "  border: none; text-align: left; padding: 3px 2px;"
+            "}"
+            "QPushButton:hover { color: #0284C7; }"
         )
+        self.more_options_btn.clicked.connect(self._toggle_more_options)
+        left_layout.addWidget(self.more_options_btn)
+
+        # Collapsible Advanced Options Container (Hidden by default, Passcode: 0000)
+        self.advanced_container = QWidget()
+        adv_layout = QVBoxLayout(self.advanced_container)
+        adv_layout.setContentsMargins(0, 0, 0, 4)
+        adv_layout.setSpacing(6)
+
+        # Row 5a: Paper Feed Mode (Moved from main form)
+        row_pm = QHBoxLayout()
+        row_pm.setSpacing(8)
+
+        pm_lbl = QLabel("Paper Feed:")
+        pm_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #64748B;")
+        row_pm.addWidget(pm_lbl)
+
+        self.paper_mode_combo = NoScrollComboBox()
+        self.paper_mode_combo.setMinimumHeight(30)
+        for pm in PAPER_MODES:
+            self.paper_mode_combo.addItem(pm)
+        saved_pm = self.settings.value("paper_mode", PAPER_MODE_A4_CENTER)
+        idx_pm = self.paper_mode_combo.findText(saved_pm)
+        if idx_pm >= 0:
+            self.paper_mode_combo.setCurrentIndex(idx_pm)
+        self.paper_mode_combo.currentIndexChanged.connect(self._on_paper_mode_changed)
+        row_pm.addWidget(self.paper_mode_combo, stretch=1)
+        adv_layout.addLayout(row_pm)
+
+        # Row 5: Fine Offsets (mm)
+        row5 = QHBoxLayout()
+        row5.setSpacing(8)
+
+        off_lbl = QLabel("Alignment Offset:")
+        off_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #64748B;")
+        row5.addWidget(off_lbl)
+
+        self.x_offset_spin = NoScrollDoubleSpinBox()
+        self.x_offset_spin.setRange(-50.0, 50.0)
+        self.x_offset_spin.setSingleStep(0.5)
+        self.x_offset_spin.setSuffix(" mm X")
+        self.x_offset_spin.setMinimumHeight(30)
+        self.x_offset_spin.setToolTip("Horizontal print alignment shift (+ right, - left)")
+        row5.addWidget(self.x_offset_spin)
+
+        self.y_offset_spin = NoScrollDoubleSpinBox()
+        self.y_offset_spin.setRange(-50.0, 50.0)
+        self.y_offset_spin.setSingleStep(0.5)
+        self.y_offset_spin.setSuffix(" mm Y")
+        self.y_offset_spin.setMinimumHeight(30)
+        self.y_offset_spin.setToolTip("Vertical print alignment shift (+ down, - up)")
+        row5.addWidget(self.y_offset_spin)
+
+        reset_btn = QPushButton("Reset")
+        reset_btn.setMinimumHeight(30)
+        reset_btn.setToolTip("Reset offsets to 0.0 mm")
+        reset_btn.setStyleSheet(
+            "QPushButton {"
+            "  font-size: 11px; font-weight: 600; background: #F1F5F9; color: #475569;"
+            "  border: 1px solid #CBD5E1; border-radius: 4px; padding: 4px 10px;"
+            "}"
+            "QPushButton:hover { background: #E2E8F0; }"
+        )
+        reset_btn.clicked.connect(self._reset_offsets)
+        row5.addWidget(reset_btn)
+
+        saved_x = self.settings.value("x_offset", 0.0)
+        saved_y = self.settings.value("y_offset", -4.50)
+        try: self.x_offset_spin.setValue(float(saved_x))
+        except Exception: self.x_offset_spin.setValue(0.0)
+        try: self.y_offset_spin.setValue(float(saved_y))
+        except Exception: self.y_offset_spin.setValue(-4.50)
+
+        self.x_offset_spin.valueChanged.connect(self._on_offset_changed)
+        self.y_offset_spin.valueChanged.connect(self._on_offset_changed)
+
+        row5.addStretch()
+        adv_layout.addLayout(row5)
+
+        # Row 5b: Date Fine Tuning & Year Format
+        row_date = QHBoxLayout()
+        row_date.setSpacing(8)
+
+        date_lbl = QLabel("Date Fine-Tune:")
+        date_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #64748B;")
+        row_date.addWidget(date_lbl)
+
+        self.date_x_spin = NoScrollDoubleSpinBox()
+        self.date_x_spin.setRange(-30.0, 30.0)
+        self.date_x_spin.setSingleStep(0.5)
+        self.date_x_spin.setSuffix(" mm X")
+        self.date_x_spin.setMinimumHeight(30)
+        self.date_x_spin.setToolTip("Independent horizontal date shift (+ right, - left)")
+        row_date.addWidget(self.date_x_spin)
+
+        self.date_y_spin = NoScrollDoubleSpinBox()
+        self.date_y_spin.setRange(-30.0, 30.0)
+        self.date_y_spin.setSingleStep(0.5)
+        self.date_y_spin.setSuffix(" mm Y")
+        self.date_y_spin.setMinimumHeight(30)
+        self.date_y_spin.setToolTip("Independent vertical date shift (+ down, - up)")
+        row_date.addWidget(self.date_y_spin)
+
+        self.year_format_combo = NoScrollComboBox()
+        self.year_format_combo.setMinimumHeight(30)
+        self.year_format_combo.addItem("2 Digits ('26)", 2)
+        self.year_format_combo.addItem("4 Digits ('2026)", 4)
+        saved_yf = self.settings.value("year_format", "2 Digits ('26)")
+        idx_yf = self.year_format_combo.findText(saved_yf)
+        if idx_yf >= 0:
+            self.year_format_combo.setCurrentIndex(idx_yf)
+        else:
+            self.year_format_combo.setCurrentIndex(0)
+        self.year_format_combo.setToolTip("Year digits format (2 digits for preprinted '20', 4 digits for blank boxes)")
+        row_date.addWidget(self.year_format_combo)
+
+        saved_dx = self.settings.value("date_x_offset", 4.50)
+        saved_dy = self.settings.value("date_y_offset", 0.0)
+        try: self.date_x_spin.setValue(float(saved_dx))
+        except Exception: self.date_x_spin.setValue(4.50)
+        try: self.date_y_spin.setValue(float(saved_dy))
+        except Exception: self.date_y_spin.setValue(0.0)
+
+        self.date_x_spin.valueChanged.connect(self._on_date_offset_changed)
+        self.date_y_spin.valueChanged.connect(self._on_date_offset_changed)
+        self.year_format_combo.currentIndexChanged.connect(self._on_year_format_changed)
+
+        row_date.addStretch()
+        adv_layout.addLayout(row_date)
+
+        # Legacy custom paper name edit (only shown when in Custom Cheque Size mode)
+        self.paper_name_edit = QLineEdit()
+        self.paper_name_edit.setText(self.settings.value("paper_name", "Check SL"))
+        self.paper_name_edit.setPlaceholderText("Custom Windows Form Name")
+        self.paper_name_edit.setMinimumHeight(30)
         self.paper_name_edit.textChanged.connect(
             lambda: self.settings.setValue("paper_name", self.paper_name_edit.text().strip())
         )
-        paper_row.addWidget(self.paper_name_edit)
-        printer_inner.addSpacing(8)
-        printer_inner.addLayout(paper_row)
+        self.paper_name_edit.setVisible(self.paper_mode_combo.currentText() == PAPER_MODE_EXACT)
+        adv_layout.addWidget(self.paper_name_edit)
 
-        root.addWidget(printer_grp)
+        # Hide container by default
+        self.advanced_container.setVisible(False)
+        left_layout.addWidget(self.advanced_container)
 
-        # ── Action buttons ───────────────────────────────────────────────────
+        left_layout.addStretch()
+
+        # Row 6: Action Buttons
         btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 8, 0, 0)
+        btn_row.setSpacing(8)
 
-        self.print_btn = QPushButton("  Print Cheque  ")
-        self.print_btn.setMinimumHeight(48)
+        self.print_btn = QPushButton("🖨️ Print Cheque")
+        self.print_btn.setMinimumHeight(40)
         self.print_btn.setStyleSheet(
             "QPushButton {"
-            "  font-size: 15px; font-weight: 600;"
-            "  background-color: #1A5276;"
-            "  color: #FFFFFF;"
-            "  border: none;"
-            "  border-radius: 8px;"
-            "  padding: 12px 48px;"
-            "  letter-spacing: 0.3px;"
+            "  font-size: 14px; font-weight: 700; background-color: #0284C7; color: #FFFFFF;"
+            "  border: none; border-radius: 6px; padding: 8px 16px;"
             "}"
-            "QPushButton:hover {"
-            "  background-color: #1F618D;"
-            "}"
-            "QPushButton:pressed {"
-            "  background-color: #154360;"
-            "}"
+            "QPushButton:hover { background-color: #0369A1; }"
+            "QPushButton:pressed { background-color: #075985; }"
         )
         self.print_btn.clicked.connect(self._print_cheque)
+        btn_row.addWidget(self.print_btn, stretch=3)
 
-        btn_row.addStretch()
-        btn_row.addWidget(self.print_btn)
-        root.addLayout(btn_row)
+        self.test_btn = QPushButton("📄 A4 Test")
+        self.test_btn.setMinimumHeight(40)
+        self.test_btn.setStyleSheet(
+            "QPushButton {"
+            "  font-size: 12px; font-weight: 600; background: #F1F5F9; color: #334155;"
+            "  border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 12px;"
+            "}"
+            "QPushButton:hover { background: #E2E8F0; }"
+        )
+        self.test_btn.setToolTip("Print on plain A4 with cheque outline for zero-waste testing")
+        self.test_btn.clicked.connect(self._test_print_guidelines)
+        btn_row.addWidget(self.test_btn, stretch=1)
 
-        # Wrap everything in a scroll area so the window always fits the screen
-        # and shows a scrollbar when it can't.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(central)
-        self.setCentralWidget(scroll)
+        self.preview_btn = QPushButton("👁️ PDF")
+        self.preview_btn.setMinimumHeight(40)
+        self.preview_btn.setStyleSheet(
+            "QPushButton {"
+            "  font-size: 12px; font-weight: 600; background: #F1F5F9; color: #334155;"
+            "  border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 12px;"
+            "}"
+            "QPushButton:hover { background: #E2E8F0; }"
+        )
+        self.preview_btn.setToolTip("Open exact PDF preview in your default browser")
+        self.preview_btn.clicked.connect(self._preview_pdf)
+        btn_row.addWidget(self.preview_btn, stretch=1)
 
-        # Start at a compact size that fits small laptop screens
-        self.resize(640, 700)
+        left_layout.addLayout(btn_row)
+        main_layout.addWidget(left_card, stretch=5)
 
+        # ══════════════════════════════════════════════════════════════════════
+        # RIGHT COLUMN: LIVE CHEQUE PREVIEW CARD
+        # ══════════════════════════════════════════════════════════════════════
+        right_card = QFrame()
+        right_card.setStyleSheet(
+            "QFrame { background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; }"
+        )
+        right_layout = QVBoxLayout(right_card)
+        right_layout.setContentsMargins(14, 14, 14, 14)
+        right_layout.setSpacing(8)
+
+        # Preview Header with Mode Toggle
+        p_head = QHBoxLayout()
+        p_title = QLabel("LIVE CHEQUE PREVIEW")
+        p_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #64748B; letter-spacing: 0.5px;")
+        p_head.addWidget(p_title)
+        p_head.addStretch()
+
+        self.zoom_radio = QRadioButton("Cheque Zoom")
+        self.zoom_radio.setChecked(True)
+        self.zoom_radio.setStyleSheet("font-size: 11px; font-weight: 600; color: #334155;")
+        self.zoom_radio.toggled.connect(self._on_preview_mode_toggle)
+        p_head.addWidget(self.zoom_radio)
+
+        self.a4_radio = QRadioButton("A4 Sheet")
+        self.a4_radio.setStyleSheet("font-size: 11px; font-weight: 600; color: #334155;")
+        self.a4_radio.toggled.connect(self._on_preview_mode_toggle)
+        p_head.addWidget(self.a4_radio)
+        right_layout.addLayout(p_head)
+
+        # Canvas
+        self.preview_canvas = ChequePreviewWidget()
+        self.preview_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        right_layout.addWidget(self.preview_canvas)
+
+        # Status Footer
+        self.status_lbl = QLabel("Official LankaPay CITS (177.8 × 88.9 mm) • Auto Center Feed (16.1 mm Margins)")
+        self.status_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
+        self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        right_layout.addWidget(self.status_lbl)
+
+        main_layout.addWidget(right_card, stretch=6)
+
+        self.setCentralWidget(central)
+        self.resize(1020, 520)
         self._on_change()
 
-    # ------------------------------------------------------------------ helpers
+    # ── Helpers & Events ─────────────────────────────────────────────────────
 
-    def _make_renderer(self) -> ChequeRenderer:
+    def _make_renderer(self, draw_guidelines: bool = False) -> ChequeRenderer:
         bank_key = self.bank_combo.currentData()
         cfg = self.banks[bank_key]
-        payee = self.payee_edit.text().strip() or "________________________________"
+        payee = self.payee_edit.text().strip() or "SAMPATH PERERA"
         amount = self.amount_spin.value()
         cheque_date = self.date_edit.date().toString("dd / MM / yyyy")
         cross_mode = self.cross_combo.currentText()
         x_offset = self.x_offset_spin.value()
         y_offset = self.y_offset_spin.value()
-        return ChequeRenderer(cfg, payee, amount, cheque_date, cross_mode, x_offset, y_offset)
+        paper_mode = self.paper_mode_combo.currentText()
+        year_digits = self.year_format_combo.currentData() or 2
+        date_x = self.date_x_spin.value()
+        date_y = self.date_y_spin.value()
+
+        return ChequeRenderer(
+            cfg, payee, amount, cheque_date, cross_mode,
+            x_offset, y_offset, paper_mode, draw_guidelines,
+            year_digits=year_digits,
+            date_x_offset_mm=date_x,
+            date_y_offset_mm=date_y,
+        )
 
     def _on_change(self):
         self.words_label.setText(amount_to_words(self.amount_spin.value()))
+        renderer = self._make_renderer()
+        self.preview_canvas.set_renderer(renderer, show_a4_view=self.a4_radio.isChecked())
+
+    def _on_preview_mode_toggle(self):
+        self._on_change()
+
+    def _on_paper_mode_changed(self):
+        pm = self.paper_mode_combo.currentText()
+        self.settings.setValue("paper_mode", pm)
+        self.paper_name_edit.setVisible(pm == PAPER_MODE_EXACT)
+        if pm == PAPER_MODE_A4_CENTER:
+            self.status_lbl.setText("Official LankaPay CITS (177.8 × 88.9 mm) • Auto Center Feed (16.1 mm Margins)")
+        elif pm == PAPER_MODE_A4_LEFT:
+            self.status_lbl.setText("Official LankaPay CITS (177.8 × 88.9 mm) • Left-Aligned Feed (0 mm Margin)")
+        else:
+            self.status_lbl.setText("Custom Cheque Slip Form (178 × 89 mm)")
+        self._on_change()
+
+    def _toggle_more_options(self):
+        if self.advanced_container.isVisible():
+            self.advanced_container.setVisible(False)
+            self.more_options_btn.setText("🔒 More Options ▾")
+        else:
+            dlg = PasscodeDialog(self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                if dlg.get_passcode().strip() == "0000":
+                    self.advanced_container.setVisible(True)
+                    self.more_options_btn.setText("⚙️ Hide More Options ▴")
+                else:
+                    QMessageBox.warning(self, "Access Denied", "Incorrect passcode! Default passcode is 0000.")
+
+    def _reset_offsets(self):
+        self.x_offset_spin.setValue(0.0)
+        self.y_offset_spin.setValue(-4.50)
+        self.date_x_spin.setValue(4.50)
+        self.date_y_spin.setValue(0.0)
+        idx_yf = self.year_format_combo.findText("2 Digits ('26)")
+        if idx_yf >= 0:
+            self.year_format_combo.setCurrentIndex(idx_yf)
 
     def _on_offset_changed(self):
         self.settings.setValue("x_offset", self.x_offset_spin.value())
         self.settings.setValue("y_offset", self.y_offset_spin.value())
+        self._on_change()
 
-    def _configure_printer(self, printer: QPrinter):
+    def _on_date_offset_changed(self):
+        self.settings.setValue("date_x_offset", self.date_x_spin.value())
+        self.settings.setValue("date_y_offset", self.date_y_spin.value())
+        self._on_change()
+
+    def _on_year_format_changed(self):
+        self.settings.setValue("year_format", self.year_format_combo.currentText())
+        self._on_change()
+
+    def _configure_printer(self, printer: QPrinter, paper_mode: str):
         bank_key = self.bank_combo.currentData()
         cfg = self.banks[bank_key]
-        # Use the PHYSICAL paper size (e.g. Check SL 180×90) for the PDF page so
-        # it matches the tray paper exactly — no rotation/centering shift when
-        # SumatraPDF prints it. Falls back to the cheque size if not configured.
-        w_mm = cfg.get("paper_width_mm", cfg["cheque_width_mm"])
-        h_mm = cfg.get("paper_height_mm", cfg["cheque_height_mm"])
 
-        # Custom page size: pass (short, long) = (90, 180) so Qt stores it
-        # portrait-style, then Landscape swaps it back to 180×90 ✓
-        page_size = QPageSize(QSizeF(h_mm, w_mm), QPageSize.Unit.Millimeter, "Cheque")
-        layout = QPageLayout(page_size, QPageLayout.Orientation.Landscape,
-                             QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
-        printer.setPageLayout(layout)
-        printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+        if paper_mode in (PAPER_MODE_A4_CENTER, PAPER_MODE_A4_LEFT):
+            page_size = QPageSize(QPageSize.PageSizeId.A4)
+            layout = QPageLayout(
+                page_size,
+                QPageLayout.Orientation.Portrait,
+                QMarginsF(0, 0, 0, 0),
+                QPageLayout.Unit.Millimeter,
+            )
+            printer.setPageLayout(layout)
+            printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+        else:
+            w_mm = cfg.get("paper_width_mm", cfg["cheque_width_mm"])
+            h_mm = cfg.get("paper_height_mm", cfg["cheque_height_mm"])
+            page_size = QPageSize(QSizeF(h_mm, w_mm), QPageSize.Unit.Millimeter, "Cheque")
+            layout = QPageLayout(
+                page_size,
+                QPageLayout.Orientation.Landscape,
+                QMarginsF(0, 0, 0, 0),
+                QPageLayout.Unit.Millimeter,
+            )
+            printer.setPageLayout(layout)
+            printer.setPageOrientation(QPageLayout.Orientation.Landscape)
 
-    def _draw_on_printer(self, printer: QPrinter):
+    def _draw_on_printer(self, printer: QPrinter, draw_guidelines: bool = False):
         painter = QPainter(printer)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        renderer = self._make_renderer()
+        renderer = self._make_renderer(draw_guidelines=draw_guidelines)
 
-        # Read DPI from the actual paint device (not the printer setting),
-        # because PDF output may use a different logical DPI than what was set.
         dpi = painter.device().logicalDpiX()
         if dpi != 96:
             painter.scale(dpi / 96.0, dpi / 96.0)
         renderer.render(painter)
         painter.end()
 
-    # ------------------------------------------------------------------ actions
+    # ── Print & Preview Actions ──────────────────────────────────────────────
 
     def _preview_pdf(self):
         if not self._validate():
@@ -921,86 +1117,79 @@ class MainWindow(QMainWindow):
         tmp.close()
         pdf_path = tmp.name
 
-        # Setup printer with PDF output settings
+        paper_mode = self.paper_mode_combo.currentText()
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
         printer.setOutputFileName(pdf_path)
-        
-        self._configure_printer(printer)
-        self._draw_on_printer(printer)
+
+        self._configure_printer(printer, paper_mode)
+        self._draw_on_printer(printer, draw_guidelines=False)
 
         webbrowser.open(f"file:///{pdf_path.replace(os.sep, '/')}")
 
-    def _silent_print(self, pdf_path: str) -> bool:
-        """Print the PDF straight to the selected printer via bundled SumatraPDF.
-
-        '-silent' suppresses any UI; '-print-settings noscale' prints the page
-        at exact 1:1 size (so alignment offsets stay correct) and lets SumatraPDF
-        deterministically rotate the landscape page to fit the cheque paper.
-        """
-        sumatra = resource_path("SumatraPDF.exe")
-        if not sumatra.exists():
-            QMessageBox.critical(self, "Print Error",
-                                 f"SumatraPDF.exe not found:\n{sumatra}")
-            return False
+    def _test_print_guidelines(self):
+        if not self._validate():
+            return
 
         printer_name = self.printer_combo.currentText()
-        # 'noscale' keeps exact 1:1 size; 'paper=<name>' forces the cheque paper
-        # size for THIS job only, so the printer's default paper stays untouched.
-        print_settings = "noscale"
-        paper = self.paper_name_edit.text().strip()
-        if paper:
-            print_settings += f",paper={paper}"
-        args = [str(sumatra), "-print-to", printer_name,
-                "-silent", "-print-settings", print_settings, pdf_path]
+        if not printer_name:
+            QMessageBox.warning(self, "No Printer", "Please select a printer from the dropdown.")
+            return
+
+        printer_info = QPrinterInfo.printerInfo(printer_name)
+        if printer_info.isNull():
+            printer_info = QPrinterInfo.defaultPrinter()
+
+        printer = QPrinter(printer_info, QPrinter.PrinterMode.HighResolution)
+        paper_mode = self.paper_mode_combo.currentText()
+        self._configure_printer(printer, paper_mode)
+
         try:
-            result = subprocess.run(
-                args, capture_output=True, text=True, timeout=60,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            self._draw_on_printer(printer, draw_guidelines=True)
+            QMessageBox.information(
+                self, "Test Print Sent",
+                f"A4 test alignment print has been sent directly to:\n\n{printer_name}\n\n(Dashed cheque outline included for alignment checking)"
             )
         except Exception as e:
-            QMessageBox.critical(self, "Print Error", f"Failed to print:\n{e}")
-            return False
-
-        if result.returncode != 0:
             QMessageBox.critical(
                 self, "Print Error",
-                f"SumatraPDF returned error code {result.returncode}.\n"
-                f"{result.stderr.strip()}",
+                f"Failed to send print job to {printer_name}:\n\n{e}"
             )
-            return False
-        return True
 
     def _print_cheque(self):
         if not self._validate():
             return
 
-        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, prefix="cheque_print_")
-        tmp.close()
-        pdf_path = tmp.name
-
-        # Setup printer with PDF output settings
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-        printer.setOutputFileName(pdf_path)
-
-        self._configure_printer(printer)
-        self._draw_on_printer(printer)
-
-        # Print silently — no browser, no dialog
-        if not self._silent_print(pdf_path):
+        printer_name = self.printer_combo.currentText()
+        if not printer_name:
+            QMessageBox.warning(self, "No Printer", "Please select a printer from the dropdown.")
             return
 
-        # Clean up the temp PDF
-        try:
-            os.remove(pdf_path)
-        except OSError:
-            pass
+        printer_info = QPrinterInfo.printerInfo(printer_name)
+        if printer_info.isNull():
+            printer_info = QPrinterInfo.defaultPrinter()
 
-        # Save payee to database history
-        name = self.payee_edit.text().strip()
-        if name:
-            save_payee(name)
+        printer = QPrinter(printer_info, QPrinter.PrinterMode.HighResolution)
+        paper_mode = self.paper_mode_combo.currentText()
+        self._configure_printer(printer, paper_mode)
+
+        try:
+            self._draw_on_printer(printer, draw_guidelines=False)
+
+            # Save payee to database history
+            name = self.payee_edit.text().strip()
+            if name:
+                save_payee(name)
+
+            QMessageBox.information(
+                self, "Print Sent",
+                f"Cheque print job has been sent directly to:\n\n{printer_name}"
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Print Error",
+                f"Failed to send print job to {printer_name}:\n\n{e}"
+            )
 
     def _validate(self) -> bool:
         if not self.payee_edit.text().strip():
@@ -1013,10 +1202,38 @@ class MainWindow(QMainWindow):
         return True
 
 
+class GlobalWheelFilter(QObject):
+    """Application-wide filter that disables mouse wheel value changes on inputs."""
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel:
+            if isinstance(obj, (QComboBox, QDoubleSpinBox, QDateEdit)):
+                event.ignore()
+                return True
+        return super().eventFilter(obj, event)
+
+
 def main():
+    print("Starting Growvia Cheque Writer GUI...", flush=True)
+
+    # Windows AppUserModelID for proper taskbar grouping and logo icon
+    try:
+        myappid = "Growvia.ChequeWriter.App.1.0"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLE)
+
+    icon_cand = resource_path("icon.png")
+    if not icon_cand.exists():
+        icon_cand = resource_path("icon.ico")
+    if icon_cand.exists():
+        app.setWindowIcon(QIcon(str(icon_cand)))
+
+    wheel_filter = GlobalWheelFilter(app)
+    app.installEventFilter(wheel_filter)
 
     banks = load_banks()
     if not banks:
@@ -1024,7 +1241,31 @@ def main():
         sys.exit(1)
 
     window = MainWindow(banks)
+
+    # Center on primary screen
+    screen = app.primaryScreen()
+    if screen:
+        avail = screen.availableGeometry()
+        w_width = min(1040, avail.width() - 30)
+        w_height = min(530, avail.height() - 40)
+        window.resize(w_width, w_height)
+        x = avail.left() + (avail.width() - w_width) // 2
+        y = avail.top() + (avail.height() - w_height) // 2
+        window.move(x, y)
+
     window.show()
+    window.raise_()
+    window.activateWindow()
+
+    try:
+        import ctypes
+        hwnd = int(window.winId())
+        ctypes.windll.user32.ShowWindow(hwnd, 9)
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+
+    print("Cheque Writer window is ready on your screen!", flush=True)
     sys.exit(app.exec())
 
 

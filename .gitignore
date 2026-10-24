@@ -4,3 +4,8 @@ __pycache__/
 *.spec
 payees.db
 SumatraPDF.exe
+.venv/
+test_*.pdf
+test_*.png
+preview_*.png
+app_screenshot.png
