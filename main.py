@@ -903,11 +903,11 @@ class MainWindow(QMainWindow):
         for pm in PAPER_MODES:
             self.paper_mode_combo.addItem(pm)
         saved_pm = self.settings.value("paper_mode", PAPER_MODE_VERT_CENTER)
-        # Migrate legacy strings
+        # Migrate legacy strings to new vertical defaults
         if saved_pm in ("A4 - Center Feed (Standard)", "A4 - Center Feed"):
-            saved_pm = PAPER_MODE_A4_CENTER
+            saved_pm = PAPER_MODE_VERT_CENTER
         elif saved_pm in ("A4 - Left-Aligned Feed", "A4 - Left Feed"):
-            saved_pm = PAPER_MODE_A4_LEFT
+            saved_pm = PAPER_MODE_VERT_LEFT
         idx_pm = self.paper_mode_combo.findText(saved_pm)
         if idx_pm >= 0:
             self.paper_mode_combo.setCurrentIndex(idx_pm)
@@ -1225,6 +1225,9 @@ class MainWindow(QMainWindow):
         idx_yf = self.year_format_combo.findText("2 Digits ('26)")
         if idx_yf >= 0:
             self.year_format_combo.setCurrentIndex(idx_yf)
+        idx_pm = self.paper_mode_combo.findText(PAPER_MODE_VERT_CENTER)
+        if idx_pm >= 0:
+            self.paper_mode_combo.setCurrentIndex(idx_pm)
 
     def _save_settings(self):
         """Persist fine-tuning offsets, paper feed mode, printer, and defaults to disk/registry."""
