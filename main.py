@@ -40,11 +40,17 @@ else:
 MM_TO_PX = 96 / 25.4
 
 # Paper & Feed Modes
-PAPER_MODE_A4_CENTER = "A4 - Center Feed (Standard)"
-PAPER_MODE_A4_LEFT = "A4 - Left-Aligned Feed"
-PAPER_MODE_EXACT = "Custom Cheque Size (178 x 89 mm)"
+PAPER_MODE_VERT_CENTER     = "Vertical / Length-wise (Center Feed - Logo First)"
+PAPER_MODE_A4_CENTER       = "A4 - Center Feed (Landscape - 178 mm)"
+PAPER_MODE_VERT_LEFT       = "Vertical / Length-wise (Left Feed - Logo First)"
+PAPER_MODE_VERT_DATE_FIRST = "Vertical / Length-wise (Center Feed - Date First)"
+PAPER_MODE_A4_LEFT         = "A4 - Left Feed (Landscape - 178 mm)"
+PAPER_MODE_EXACT           = "Custom Cheque Size (178 x 89 mm)"
 PAPER_MODES = [
+    PAPER_MODE_VERT_CENTER,
     PAPER_MODE_A4_CENTER,
+    PAPER_MODE_VERT_LEFT,
+    PAPER_MODE_VERT_DATE_FIRST,
     PAPER_MODE_A4_LEFT,
     PAPER_MODE_EXACT,
 ]
@@ -96,7 +102,7 @@ class ChequeRenderer:
     def __init__(self, bank_config: dict, payee: str, amount: float,
                  cheque_date: str, cross_mode: str,
                  x_offset_mm: float = 0.0, y_offset_mm: float = 0.0,
-                 paper_mode: str = PAPER_MODE_A4_CENTER,
+                 paper_mode: str = PAPER_MODE_VERT_CENTER,
                  draw_guidelines: bool = False,
                  year_digits: int = 2,
                  date_x_offset_mm: float = 0.0,
@@ -114,25 +120,13 @@ class ChequeRenderer:
         self.date_x_offset_mm = date_x_offset_mm
         self.date_y_offset_mm = date_y_offset_mm
 
-        cheque_w = self.cfg.get("cheque_width_mm", 177.8)
-        if self.paper_mode == PAPER_MODE_A4_CENTER:
-            # Center on 210mm A4 sheet: (210 - 177.8) / 2 = 16.1 mm
-            self.base_x_mm = (210.0 - cheque_w) / 2.0
-            self.base_y_mm = 0.0
-        elif self.paper_mode == PAPER_MODE_A4_LEFT:
-            self.base_x_mm = 0.0
-            self.base_y_mm = 0.0
-        else:
-            self.base_x_mm = 0.0
-            self.base_y_mm = 0.0
-
     @property
     def eff_x(self) -> float:
-        return self.base_x_mm + self.x_offset_mm
+        return self.x_offset_mm
 
     @property
     def eff_y(self) -> float:
-        return self.base_y_mm + self.y_offset_mm
+        return self.y_offset_mm
 
     def _make_font(self, font_size_mm: float, bold: bool = False) -> QFont:
         font = QFont(self.FONT)
@@ -216,7 +210,79 @@ class ChequeRenderer:
             self._draw_text(painter, fyyyy["x"] + dx + (i + shift) * spacing, fyyyy["y"] + dy, ch, fs,
                             align=Qt.AlignmentFlag.AlignHCenter, max_width_mm=spacing)
 
-    def render(self, painter: QPainter):
+    def render(self, painter: QPainter, apply_page_transform: bool = True, draw_sheet_outline: bool = False):
+        cheque_w = self.cfg.get("cheque_width_mm", 177.8)
+        cheque_h = self.cfg.get("cheque_height_mm", 88.9)
+
+        if not apply_page_transform:
+            self._render_cheque_content(painter)
+            return
+
+        sheet_w = 210.0
+        pm = self.paper_mode
+
+        if pm == PAPER_MODE_VERT_CENTER:
+            x0 = (sheet_w - cheque_h) / 2.0  # 60.55 mm
+            x1 = x0 + cheque_h               # 149.45 mm
+            if draw_sheet_outline:
+                painter.setPen(QPen(QColor("#0D9488"), mm(0.35), Qt.PenStyle.DashLine))
+                painter.setBrush(QBrush(QColor("#ECFDF5")))
+                painter.drawRect(QRectF(mm(x0), mm(0), mm(cheque_h), mm(cheque_w)))
+            painter.save()
+            painter.translate(mm(x1), mm(0))
+            painter.rotate(90)
+            self._render_cheque_content(painter)
+            painter.restore()
+
+        elif pm == PAPER_MODE_VERT_LEFT:
+            if draw_sheet_outline:
+                painter.setPen(QPen(QColor("#0D9488"), mm(0.35), Qt.PenStyle.DashLine))
+                painter.setBrush(QBrush(QColor("#ECFDF5")))
+                painter.drawRect(QRectF(mm(0), mm(0), mm(cheque_h), mm(cheque_w)))
+            painter.save()
+            painter.translate(mm(cheque_h), mm(0))
+            painter.rotate(90)
+            self._render_cheque_content(painter)
+            painter.restore()
+
+        elif pm == PAPER_MODE_VERT_DATE_FIRST:
+            x0 = (sheet_w - cheque_h) / 2.0
+            if draw_sheet_outline:
+                painter.setPen(QPen(QColor("#0D9488"), mm(0.35), Qt.PenStyle.DashLine))
+                painter.setBrush(QBrush(QColor("#ECFDF5")))
+                painter.drawRect(QRectF(mm(x0), mm(0), mm(cheque_h), mm(cheque_w)))
+            painter.save()
+            painter.translate(mm(x0), mm(cheque_w))
+            painter.rotate(-90)
+            self._render_cheque_content(painter)
+            painter.restore()
+
+        elif pm == PAPER_MODE_A4_CENTER:
+            x0 = (sheet_w - cheque_w) / 2.0  # 16.1 mm
+            if draw_sheet_outline:
+                painter.setPen(QPen(QColor("#0D9488"), mm(0.35), Qt.PenStyle.DashLine))
+                painter.setBrush(QBrush(QColor("#ECFDF5")))
+                painter.drawRect(QRectF(mm(x0), mm(0), mm(cheque_w), mm(cheque_h)))
+            painter.save()
+            painter.translate(mm(x0), mm(0))
+            self._render_cheque_content(painter)
+            painter.restore()
+
+        elif pm == PAPER_MODE_A4_LEFT:
+            if draw_sheet_outline:
+                painter.setPen(QPen(QColor("#0D9488"), mm(0.35), Qt.PenStyle.DashLine))
+                painter.setBrush(QBrush(QColor("#ECFDF5")))
+                painter.drawRect(QRectF(mm(0), mm(0), mm(cheque_w), mm(cheque_h)))
+            self._render_cheque_content(painter)
+
+        else:  # Custom Cheque Size
+            if draw_sheet_outline:
+                painter.setPen(QPen(QColor("#0D9488"), mm(0.35), Qt.PenStyle.DashLine))
+                painter.setBrush(QBrush(QColor("#ECFDF5")))
+                painter.drawRect(QRectF(mm(0), mm(0), mm(cheque_w), mm(cheque_h)))
+            self._render_cheque_content(painter)
+
+    def _render_cheque_content(self, painter: QPainter):
         f = self.cfg["fields"]
         cheque_w = self.cfg.get("cheque_width_mm", 177.8)
         cheque_h = self.cfg.get("cheque_height_mm", 88.9)
@@ -368,22 +434,15 @@ class ChequePreviewWidget(QFrame):
             painter.translate(offset_x, offset_y)
             painter.scale(scale, scale)
 
-            # A4 Sheet with shadow
+            # A4 Sheet background with border
             painter.setPen(QPen(QColor("#94A3B8"), 1))
             painter.setBrush(QBrush(QColor("#FFFFFF")))
             painter.drawRect(QRectF(0, 0, mm(210.0), mm(297.0)))
 
-            # Cheque Leaf area on A4
-            eff_x = self.renderer.eff_x
-            eff_y = self.renderer.eff_y
-            painter.setPen(QPen(QColor("#0D9488"), 1.2, Qt.PenStyle.DashLine))
-            painter.setBrush(QBrush(QColor("#ECFDF5")))
-            painter.drawRect(QRectF(mm(eff_x), mm(eff_y), mm(cheque_w_mm), mm(cheque_h_mm)))
-
-            self.renderer.render(painter)
+            self.renderer.render(painter, apply_page_transform=True, draw_sheet_outline=True)
             painter.restore()
         else:
-            # Zoomed Cheque View
+            # Zoomed Cheque View (Always horizontal, crisp and readable)
             margin = 16
             scale = min((w - margin * 2) / mm(cheque_w_mm), (h - margin * 2) / mm(cheque_h_mm))
             offset_x = (w - mm(cheque_w_mm) * scale) / 2.0
@@ -409,22 +468,7 @@ class ChequePreviewWidget(QFrame):
             painter.setPen(QColor("#115E59"))
             painter.drawText(QRectF(mm(18), mm(8), mm(100), mm(8)), Qt.AlignmentFlag.AlignLeft, bank_name)
 
-            orig_bx = self.renderer.base_x_mm
-            orig_by = self.renderer.base_y_mm
-            orig_ox = self.renderer.x_offset_mm
-            orig_oy = self.renderer.y_offset_mm
-            self.renderer.base_x_mm = 0.0
-            self.renderer.base_y_mm = 0.0
-            self.renderer.x_offset_mm = 0.0
-            self.renderer.y_offset_mm = 0.0
-
-            self.renderer.render(painter)
-
-            self.renderer.base_x_mm = orig_bx
-            self.renderer.base_y_mm = orig_by
-            self.renderer.x_offset_mm = orig_ox
-            self.renderer.y_offset_mm = orig_oy
-
+            self.renderer.render(painter, apply_page_transform=False, draw_sheet_outline=False)
             painter.restore()
 
 
@@ -858,10 +902,17 @@ class MainWindow(QMainWindow):
         self.paper_mode_combo.setMinimumHeight(30)
         for pm in PAPER_MODES:
             self.paper_mode_combo.addItem(pm)
-        saved_pm = self.settings.value("paper_mode", PAPER_MODE_A4_CENTER)
+        saved_pm = self.settings.value("paper_mode", PAPER_MODE_VERT_CENTER)
+        # Migrate legacy strings
+        if saved_pm in ("A4 - Center Feed (Standard)", "A4 - Center Feed"):
+            saved_pm = PAPER_MODE_A4_CENTER
+        elif saved_pm in ("A4 - Left-Aligned Feed", "A4 - Left Feed"):
+            saved_pm = PAPER_MODE_A4_LEFT
         idx_pm = self.paper_mode_combo.findText(saved_pm)
         if idx_pm >= 0:
             self.paper_mode_combo.setCurrentIndex(idx_pm)
+        else:
+            self.paper_mode_combo.setCurrentIndex(0)
         self.paper_mode_combo.currentIndexChanged.connect(self._on_paper_mode_changed)
         row_pm.addWidget(self.paper_mode_combo, stretch=1)
         adv_layout.addLayout(row_pm)
@@ -1139,10 +1190,16 @@ class MainWindow(QMainWindow):
         pm = self.paper_mode_combo.currentText()
         self.settings.setValue("paper_mode", pm)
         self.paper_name_edit.setVisible(pm == PAPER_MODE_EXACT)
-        if pm == PAPER_MODE_A4_CENTER:
-            self.status_lbl.setText("Official LankaPay CITS (177.8 × 88.9 mm) • Auto Center Feed (16.1 mm Margins)")
+        if pm == PAPER_MODE_VERT_CENTER:
+            self.status_lbl.setText("Vertical Center Feed (88.9 mm) • Bank Logo Enters First")
+        elif pm == PAPER_MODE_VERT_LEFT:
+            self.status_lbl.setText("Vertical Left Feed (88.9 mm) • Bank Logo Enters First")
+        elif pm == PAPER_MODE_VERT_DATE_FIRST:
+            self.status_lbl.setText("Vertical Center Feed (88.9 mm) • Date Edge Enters First")
+        elif pm == PAPER_MODE_A4_CENTER:
+            self.status_lbl.setText("Official LankaPay CITS (177.8 × 88.9 mm) • Landscape Center Feed (16.1 mm Margins)")
         elif pm == PAPER_MODE_A4_LEFT:
-            self.status_lbl.setText("Official LankaPay CITS (177.8 × 88.9 mm) • Left-Aligned Feed (0 mm Margin)")
+            self.status_lbl.setText("Official LankaPay CITS (177.8 × 88.9 mm) • Landscape Left Feed (0 mm Margin)")
         else:
             self.status_lbl.setText("Custom Cheque Slip Form (178 × 89 mm)")
         self._on_change()
@@ -1226,7 +1283,7 @@ class MainWindow(QMainWindow):
         bank_key = self.bank_combo.currentData()
         cfg = self.banks[bank_key]
 
-        if paper_mode in (PAPER_MODE_A4_CENTER, PAPER_MODE_A4_LEFT):
+        if paper_mode != PAPER_MODE_EXACT:
             page_size = QPageSize(QPageSize.PageSizeId.A4)
             layout = QPageLayout(
                 page_size,
@@ -1257,7 +1314,7 @@ class MainWindow(QMainWindow):
         dpi = painter.device().logicalDpiX()
         if dpi != 96:
             painter.scale(dpi / 96.0, dpi / 96.0)
-        renderer.render(painter)
+        renderer.render(painter, apply_page_transform=True, draw_sheet_outline=draw_guidelines)
         painter.end()
 
     # ── Print & Preview Actions ──────────────────────────────────────────────
